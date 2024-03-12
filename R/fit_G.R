@@ -1,0 +1,48 @@
+#' Estimate the parameters in Gaussian mixture model for G.hat.
+#' @param G G.hat. It will be standarded to have norm sqrt(S) if it's not.
+#' @param init_sigma A numeric vector of length 2, containing the initial standard deviations of the Gaussian components
+#' @param init_pi A numeric vector of length 2, containing the initial weights of the Gaussian components
+#' @param fix.sigma1 If the standard deviation of the null should be fixed. Default is TRUE.
+#' @param threshold.fsr The threshold of local false sign rate to conclude significant SNPs. Default is 0.05.
+#' @return A list contatining three objects. parameters: the posterior probabilities and variances of Gaussian componients. significantSNPs: A logic vector indicating if the SNPs are significant. lfsr: the local false sign rates of all SNPs.
+#' @examples
+#' fit <- fitMixGaussian(G=rnorm(1000),init_sigma=c(1,1.5),init_pi=c(0.9,0.1))
+#' @export
+fitMixGaussian <- function(G,init_sigma,init_pi,fix.sigma1=TRUE,threshold.fsr=0.05){
+  pi.old <- init_pi;sigma.old <- init_sigma;pi.new <- pi.old;sigma.new <- sigma.old
+  con <- 0
+  while (!con) {
+    pi.old <- pi.new; sigma.old <- sigma.new
+    Gamma <- cbind( pi.old[1]*dnorm(x = G,mean = 0,sd = sigma.old[1]),pi.old[2]*dnorm(x = G,mean = 0,sd = sigma.old[2]) );Gamma <- Gamma/rowSums(Gamma)
+    if(fix.sigma1==FALSE){
+      sigma.new[1] <- sqrt(sum( Gamma[,1]*G^2 )/sum(Gamma[,1]));sigma.new[1] <- ifelse( sigma.new[1]<1,sigma.new[1],init_sigma[1] )
+    }
+    sigma.new[2] <- sqrt(sum( Gamma[,2]*G^2 )/sum(Gamma[,2]));sigma.new[2] <- ifelse( sigma.new[2]>1,sigma.new[2],init_sigma[2] )
+    Gamma <- cbind( pi.old[1]*dnorm(x = G,mean = 0,sd = sigma.new[1]),pi.old[2]*dnorm(x = G,mean = 0,sd = sigma.new[2]) );Gamma <- Gamma/rowSums(Gamma)
+    pi.new <- colMeans(Gamma)
+    if(any(sigma.new<1e-04)){
+      sigma.new <- c(sigma0,init_sigma)
+    }
+    con <- converged2(pi.old,sigma.old,pi.new,sigma.new,G)
+  }
+  post <- list(pi.old,sigma.new);names(post) <- c("pi","sigma")
+
+  tau <- sigma.new[2]^2-sigma.new[1]^2
+
+  pi0 <- pi.old[1]*dnorm(x = G,mean = 0,sd = sigma.new[1]);pi1 <- pi.old[2]*dnorm(x = G,mean = 0,sd = sigma.new[2])
+  pi0 <- pi0/(pi0+pi1);pi1 <- 1-pi0
+  post.var <- 1/( 1/sigma.new[1]^2+1/tau)
+  post.mean <- G/sigma.new[1]^2*post.var
+  postProb <- cbind( pi.old[1]*dnorm(x = G,mean = 0,sd = sigma.new[1]),pi.old[2]*dnorm(x = G,mean = 0,sd = sigma.new[2]) );Gamma <- Gamma/rowSums(Gamma)
+  A <- cbind(pnorm(q = 0,mean = post.mean,sd = sqrt(post.var) )*pi1+ pi0,(1-pnorm(q = 0,mean = post.mean,sd = sqrt(post.var) ))*pi1+pi0 )
+  lfsr <- matrixStats::rowMins(A)
+  signifSNP <- lfsr<threshold.fsr
+  result <- list(post,signifSNP,lfsr);names(result) <- c("parameters","significantSNPs","lfsr")
+  return(result)
+}
+
+converged2 <- function(pi.old,sigma.old,pi.new,sigma.new,G){
+  l.old <- pi.old[1]*dnorm(x = G,mean = 0,sd = sigma.old[1])+pi.old[2]*dnorm(x = G,mean = 0,sd = sigma.old[2])
+  l.new <- pi.new[1]*dnorm(x = G,mean = 0,sd = sigma.new[1])+pi.new[2]*dnorm(x = G,mean = 0,sd = sigma.new[2])
+  return(ifelse( abs(sum(log(l.old))-sum(log(l.new)))<1e-4,1,0 ))
+}
