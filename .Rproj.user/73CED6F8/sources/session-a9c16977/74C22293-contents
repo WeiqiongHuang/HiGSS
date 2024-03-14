@@ -1,0 +1,659 @@
+---
+title: "specify parameters to make clusters easier to identify"
+output: html_document
+date: "2024-01-20"
+---
+
+```{r}
+library(LaplacesDemon)
+library(invgamma)
+library(aricode)
+source("funcs/simulations.R")
+library(e1071)  
+source("funcs/funcs13.R")
+library(mclust)
+J <- 5; 
+set.seed(3)
+SUPER_PATHWAY <- vector()
+SUB_PATHWAY <- vector()
+for (j in 1:J) {
+  G <- rpois(n = 1,lambda = 8)
+  for (g in 1:G) {
+    mg <- ifelse(rpois(n = 1,lambda = 10)>13,rpois(n = 10,lambda = 30),rpois(n = 5,lambda = 10))
+    SUB_PATHWAY <- c(SUB_PATHWAY, rep(paste0(j,":",g),mg))
+    SUPER_PATHWAY <- c(SUPER_PATHWAY, rep(j,mg))
+  }
+}
+metabolites <- (cbind(SUPER_PATHWAY,SUB_PATHWAY,c(1:length(SUPER_PATHWAY))))
+colnames(metabolites) <- c("SUPER_PATHWAY","SUB_PATHWAY","metabolite")
+metabolites <- as.data.frame(metabolites)
+
+seeds <- c(1,2,3,5,7,9,11,12,20,22)
+K <- 10;K.hat <- K
+N <- 1000;S <- 10000
+num.metabolites <- nrow(metabolites)
+p.0 <- rbeta(n = K,shape1 = 2,shape2 = 1)
+sigma.alt <- runif(n = K,min = 6,max = 9)
+L.true <- matrix(data = NA,nrow = num.metabolites,ncol = K)
+L.parameters <- list();clusters.true <- list()
+for (k in 1:K) {
+  set.seed(seeds[k])
+  simu.L <- rHDP(metabolites = metabolites,gamma = 4,alpha0 = 2,p.00 = 0.05,b.l = -6,b.u = 6,p.0 = p.0[k],p.out = 0,tau = 10,sigma.alpha = 3,sigma.beta = 2)
+  L.parameters[[k]] <- simu.L
+  L.true[,k] <- simu.L$L
+  clusters.true[[k]] <- simu.L$K.sub
+}
+# regenerate.parameters <- list(L.parameters,column.orders)
+# names(regenerate.parameters) <- c("L.parameters","column.orders")
+column.orders <- order(colSums(L.true^2),decreasing = T)
+L.true <- L.true[,column.orders]
+
+sigSNPs <- rbern(n = S*K,prob = 0.005)
+#gaussian entries
+G <- matrix(data=ifelse(sigSNPs==1,rnorm(n = S*K,mean = 0,sd = sigma.alt/sqrt(N)),0), nrow = S, ncol = K,byrow = T)
+#laplace entries
+#G <- matrix(data=ifelse(sigSNPs==1,rlaplace(n = S*K,mu = 0,sigma = sigma.alt[k]/sqrt(2*N)),0), nrow = S, ncol = K,byrow = T)
+
+
+sigSNPs <- matrix(data=sigSNPs, nrow = S, ncol = K,byrow = T)
+sigSNPs <- rowSums(sigSNPs)>0
+X <- simuGenotype(N = N,S = S)$X
+X <- X-rowMeans(X)%*%t(rep(1,N))
+Dss = rowSums(X^2)
+Theta <- matrix(data = rnorm(n = N*K,mean = 0,sd = 1),nrow = N,ncol = K)
+C <- t(X)%*%G+Theta
+#C <- Theta
+
+SigmaSquare <- rgamma(n = num.metabolites,shape = 1,rate = 1)# mean = 1
+E <- matrix(data = rnorm(n = N*num.metabolites,mean = 0,sd = rep(sqrt(SigmaSquare),N)),nrow = num.metabolites,ncol = N)
+L.true <- L.true/sqrt(eigen(L.true%*%t(L.true))[[1]][K]*N/eigen(E%*%t(E))[[1]][1]/1.2)
+#eigen(L%*%t(L))[[1]][K]*N/eigen(E%*%t(E))[[1]][1]
+
+Delta <- simuDelta(S = S,metabolites = metabolites,Dss = Dss,p0 =0.3,SigmaSquare = SigmaSquare)
+
+M <- as.matrix(L.true%*%t(C))+Delta%*%X+E
+M <- M-rowMeans(M)%*%t(rep(1,N))
+B.hat <- M%*%t(X);B.hat <- sapply(1:S, function(s) B.hat[,s]/sqrt(Dss[s]))
+B.svd <- svd(B.hat)
+#plot(B.svd$d)
+L.hat <- B.svd$u[,1:K]*sqrt(num.metabolites)
+G.bar <- B.svd$v[,1:K]*sqrt(S)
+G.hat <- X%*%C;G.hat <- sapply(1:S, function(s){  G.hat[s,]/sqrt(Dss[s]) });G.hat <- t(G.hat)
+U <- svd(t(G.bar)%*%G.hat)$u;V <- svd(t(G.bar)%*%G.hat)$v
+A <- U%*%t(V)
+L.hat <- L.hat%*%A
+
+Sigma <- vector()
+for (m in 1:num.metabolites) {
+  Sigma[m] <- (sum(B.hat[m,]^2)-sum( (t(B.hat[m,])%*%B.svd$v[,1:K])%*%t((t(B.hat[m,])%*%B.svd$v[,1:K]))  ) )/(S-1)
+}
+
+IDs <- metabolites
+
+for (k in 1:K) {
+  par(mfrow=c(1,2))
+  plot(L.true[,k],pch=ifelse(L.true[,k]==0,17,19),col= match(IDs$SUB_PATHWAY,cbind(unique(IDs$SUB_PATHWAY), c(1:length(unique(IDs$SUB_PATHWAY))) )),main=k);abline(h=0)
+  plot(sign(skewness(L.true[,k])*skewness(L.hat[,k]))*L.hat[,k],pch=19,col= match(IDs$SUB_PATHWAY,cbind(unique(IDs$SUB_PATHWAY), c(1:length(unique(IDs$SUB_PATHWAY))) )));abline(h=0)
+}
+```
+
+
+```{r}
+Num.simu <- 50
+InclusionRates.5 <- matrix(nrow = K,ncol = Num.simu)
+CoverageRates.5 <- matrix(nrow = K,ncol = Num.simu)
+NMI.5 <- matrix(nrow = K,ncol = Num.simu)
+ARI.5 <- matrix(nrow = K,ncol = Num.simu)
+
+InclusionRates.25 <- matrix(nrow = K,ncol = Num.simu)
+CoverageRates.25 <- matrix(nrow = K,ncol = Num.simu)
+NMI.25 <- matrix(nrow = K,ncol = Num.simu)
+ARI.25 <- matrix(nrow = K,ncol = Num.simu)
+
+InclusionRates.75 <- matrix(nrow = K,ncol = Num.simu)
+CoverageRates.75 <- matrix(nrow = K,ncol = Num.simu)
+NMI.75 <- matrix(nrow = K,ncol = Num.simu)
+ARI.75 <- matrix(nrow = K,ncol = Num.simu)
+
+InclusionRates.95 <- matrix(nrow = K,ncol = Num.simu)
+CoverageRates.95 <- matrix(nrow = K,ncol = Num.simu)
+NMI.95 <- matrix(nrow = K,ncol = Num.simu)
+ARI.95 <- matrix(nrow = K,ncol = Num.simu)
+p.out <- 0.01
+for (num.simu in 1:Num.simu) {
+  #re-generate L
+  L.true <- matrix(data = NA,nrow = num.metabolites,ncol = K)
+  for (k in 1:K) {
+    L.true[,k] <- rnorm(n = num.metabolites,mean = L.parameters[[k]]$mu,L.parameters[[k]]$sd)
+    
+    #add outliers
+    outliers <- rbern(n = nrow(IDs),prob = p.out)
+    L.out <- runif(n = sum(outliers==1),min = -6,max = 6)
+    
+    L.true[which(outliers==1)[(L.out-L.parameters[[k]]$mu[outliers==1]-3*L.parameters[[k]]$sd[outliers==1])*(L.out-L.parameters[[k]]$mu[outliers==1]+3*L.parameters[[k]]$sd[outliers==1])>0],k] <- L.out[(L.out-L.parameters[[k]]$mu[outliers==1]-3*L.parameters[[k]]$sd[outliers==1])*(L.out-L.parameters[[k]]$mu[outliers==1]+3*L.parameters[[k]]$sd[outliers==1])>0]
+  }
+  column.orders <- order(colSums(L.true^2),decreasing = T)
+  L.true <- L.true[,column.orders]
+  sigSNPs <- rbern(n = S*K,prob = 0.005)
+  #gaussian entries
+  G <- matrix(data=ifelse(sigSNPs==1,rnorm(n = S*K,mean = 0,sd = sigma.alt/sqrt(N)),0), nrow = S, ncol = K,byrow = T)
+  sigSNPs <- matrix(data=sigSNPs, nrow = S, ncol = K,byrow = T)
+  sigSNPs <- rowSums(sigSNPs)>0
+  X <- simuGenotype(N = N,S = S)$X
+  X <- X-rowMeans(X)%*%t(rep(1,N))
+  Dss = rowSums(X^2)
+  Theta <- matrix(data = rnorm(n = N*K,mean = 0,sd = 1),nrow = N,ncol = K)
+  C <- t(X)%*%G+Theta
+  SigmaSquare <- rgamma(n = num.metabolites,shape = 1,rate = 1)# mean = 1
+  E <- matrix(data = rnorm(n = N*num.metabolites,mean = 0,sd = rep(sqrt(SigmaSquare),N)),nrow = num.metabolites,ncol = N)
+  #L.true <- L.true/sqrt(eigen(L.true%*%t(L.true))[[1]][K]*N/eigen(E%*%t(E))[[1]][1]/1)
+  L.true <- L.true*0.1
+  Delta <- simuDelta(S = S,metabolites = metabolites,Dss = Dss,p0 =0.3,SigmaSquare = SigmaSquare)
+  M <- as.matrix(L.true%*%t(C))+Delta%*%X+E
+  M <- M-rowMeans(M)%*%t(rep(1,N))
+  B.hat <- M%*%t(X);B.hat <- sapply(1:S, function(s) B.hat[,s]/sqrt(Dss[s]))
+  B.svd <- svd(B.hat)
+  #plot(B.svd$d)
+  L.hat <- B.svd$u[,1:K]*sqrt(num.metabolites)
+  G.bar <- B.svd$v[,1:K]*sqrt(S)
+  G.hat <- X%*%C;G.hat <- sapply(1:S, function(s){  G.hat[s,]/sqrt(Dss[s]) });G.hat <- t(G.hat)
+  U <- svd(t(G.bar)%*%G.hat)$u;V <- svd(t(G.bar)%*%G.hat)$v
+  A <- U%*%t(V)
+  L.hat <- L.hat%*%A
+  Sigma <- vector()
+  for (m in 1:num.metabolites) {
+    Sigma[m] <- (sum(B.hat[m,]^2)-sum( (t(B.hat[m,])%*%B.svd$v[,1:K])%*%t((t(B.hat[m,])%*%B.svd$v[,1:K]))  ) )/(S-1)
+  }
+  #correct variances
+  Var <- list(Sigma,num.metabolites*(1+S/N)/B.svd$d[1:K]^2);names(Var) <- c("U","V")#
+  #wrong variances
+  #Var <- list(Sigma,num.metabolites/B.svd$d[1:K]^2);names(Var) <- c("U","V")#
+  data <- list(L.hat,Var,IDs);names(data) <- c("L","var","metabolites")
+  
+  #run Gibbs sampler
+  for (k.latent in 1:1) {
+  #k.latent <- 1
+  n.metabolite <- 5
+  IDs.known <- IDs[IDs$SUB_PATHWAY!="Unknown",]
+  t <- table(IDs.known$SUB_PATHWAY  )
+  subp.big <- names(t)[t>=n.metabolite]
+  IDs.big <- IDs[IDs$SUB_PATHWAY %in% subp.big,]
+  
+  var.g <- sapply(1:length(unique(IDs.big$SUB_PATHWAY)), function(i){var(data$L[IDs$SUB_PATHWAY==unique(IDs.big$SUB_PATHWAY)[i],k.latent][abs((data$L[IDs$SUB_PATHWAY==unique(IDs.big$SUB_PATHWAY)[i],k.latent]-mean(data$L[IDs$SUB_PATHWAY==unique(IDs.big$SUB_PATHWAY)[i],k.latent]))/sd(data$L[IDs$SUB_PATHWAY==unique(IDs.big$SUB_PATHWAY)[i],k.latent]))<3])})-
+  sapply(1:length(unique(IDs.big$SUB_PATHWAY)), function(i){mean( Sigma[IDs$SUB_PATHWAY==unique(IDs.big$SUB_PATHWAY)[i]][abs((data$L[IDs$SUB_PATHWAY==unique(IDs.big$SUB_PATHWAY)[i],k.latent]-mean(data$L[IDs$SUB_PATHWAY==unique(IDs.big$SUB_PATHWAY)[i],k.latent]))/sd(data$L[IDs$SUB_PATHWAY==unique(IDs.big$SUB_PATHWAY)[i],k.latent]))<3]*data$var$V[k.latent] )})
+
+  var.g <- var.g[var.g>0.01]
+  var.g <- var.g[!is.na(var.g)]
+  alpha <- mean(var.g)^2/var(var.g)+2
+  beta <- (alpha-1)*mean(var.g)
+  #########################################
+  
+  {alpha1_mu <- 2;alpha2_mu <- 2
+  alpha1.a <- 5;alpha1.b <- 1;alpha2.a <- 5;alpha2.b <- 1
+  p.outlier.alpha <- 1/5;p.outlier.beta <- 999/5
+  p.0 <- 0.1;p.00 <- 0.1
+  p <- dim(data$L)[1]
+  alpha.grid <- c(seq(0.1,1,0.1),c(1:15) )
+  # taus <- sqrt(qinvgamma(p = c(0.01,0.05,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.95,0.99),shape = alpha,rate = beta))
+  # taus.counts <- rep(0,length(taus))
+  taus <- sqrt(invgamma::qinvgamma(c(1:20)/21,shape = alpha,rate = beta))#fix quantiles
+  p.taus <- invgamma::dinvgamma(x = taus^2,shape = alpha,rate = beta);p.taus <- p.taus/sum(p.taus)
+  alpha.tau <- rep(1/length(taus), length(taus) )
+  gamma.tau <- 1/2
+  b.l <- ((range(data$L[,k.latent])-mean(data$L[,k.latent]))*1.25+mean(data$L[,k.latent]))[1]
+  b.u <- ((range(data$L[,k.latent])-mean(data$L[,k.latent]))*1.25+mean(data$L[,k.latent]))[2]
+  a <- 1;b <- 1;c <- 2.804168;d <- 0.006793593
+  w <- qcauchy(p = c(0.6,0.7,0.8,0.9,0.95),location = 0,scale = 1)
+  p.w <- dcauchy(x = qcauchy(p = c(0.6,0.7,0.8,0.9,0.95),location = 0,scale = 1),location = 0,scale = 1)
+  p.w <- p.w/sum(p.w)
+  p_taus <- rep(1/length(taus),length(taus))
+  pathways <- listOfPathway(data = data$metabolites,supname = "SUPER_PATHWAY",subname ="SUB_PATHWAY",L.hat=data$L,var.g = data$var,k=k.latent,w = w,a = a,b = b,alpha1_mu = alpha1_mu,alpha2_mu = alpha2_mu,taus = taus)
+  J <- length(pathways) 
+  dishes <- InitDishes()
+  restaurants <- InitRestaurants(pathways = pathways)
+  clusters <- InitClusters(pathways = pathways)
+  M_k <- matrix(data = 0,nrow = J);M_k <- M_k[,-1]#number of tables serving dish k
+  #Community <- matrix(data = 0,nrow = nrow(data$L),ncol = nrow(data$L))
+  }
+########################
+
+{Num.K <- vector();Num.T <- vector()
+Iter <- 1000;record <- 501;updateAlpha <- 1;p.outlier <- 0.001;init <- 1
+# if(init==1){
+#   Taus.counts <- matrix(data = 0,nrow = Iter-record+1,ncol = length(taus))
+# }
+Mus <- matrix(data = 0,nrow = Iter-record+1,ncol = nrow(data$metabolites))
+#SDs <- matrix(data = 0,nrow = Iter-record+1,ncol = nrow(data$metabolites))
+num.sub <- length(unique(IDs$SUB_PATHWAY))
+
+Community <- matrix(data = 0,nrow = num.sub,ncol = num.sub)
+Is.singleton <- rep(0,length(unique(data$metabolites$SUB_PATHWAY)))
+Mu.g <- matrix(data = 0,nrow = Iter-record+1,ncol = num.sub)
+Sigma.g <- matrix(data = 0,nrow = Iter-record+1,ncol =num.sub)
+postL <- matrix(data = 0,nrow = Iter-record+1,ncol = nrow(data$metabolites))
+postL2 <- matrix(data = 0,nrow = Iter-record+1,ncol = nrow(data$metabolites))
+PCHs <- matrix(data = 0,nrow = Iter,ncol = nrow(data$metabolites))
+num.clusters <- vector()
+MAF <- T
+if(MAF==T){likeli.joint <- vector()}
+#p.taus <- (colSums(Taus.counts)+nrow(Taus.counts)/length(taus))/(sum(Taus.counts)+nrow(Taus.counts))
+for (iter in 1:Iter) {
+  for (j in 1:J) {
+    for (g in 1:length(pathways[[j]])) {
+      for (m in sample(x = c(1:pathways[[j]][[g]]$Mg),size = pathways[[j]][[g]]$Mg,replace = FALSE)) {
+        #j <- 3;g <-8;m <- 1
+        #assign m to a cluster with the majority or the cluster of outliers
+        #abcd <- update.abcd(clusters);a <- abcd$a;b <- abcd$b;c <- abcd$c;d <- abcd$d
+        m.is.outlier <- is.outlier(pathways = pathways,j = j,g = g,m = m,p.outlier = p.outlier,alpha1_mu = alpha1_mu,alpha2_mu = alpha2_mu,clusters = clusters,restaurants = restaurants,dishes = dishes,M_k = M_k,N_t = N_t,N_c = N_c,taus = taus,p.taus = p.taus,p.00 = p.00,p.0 = p.0,b.l = b.l,b.u = b.u)
+        #c.m <- 2
+        pathways[[j]][[g]]$z[m] <- m.is.outlier
+        pathways[[j]][[g]]$c[m] <- 1-m.is.outlier
+        PCHs[iter,pathways[[j]][[g]]$indices[m]] <- m.is.outlier
+        pathways[[j]][[g]]$t[m] <- 0;pathways[[j]][[g]]$k[m] <- 0
+        #if m is not an outlier
+        if(!m.is.outlier){
+          c.m <- 1
+          if( !(c.m%in%clusters[[j]][[g]][,1]) ){
+          #assign table for cluster c
+          t_c <- sample_t_c(pathways = pathways,j = j,g = g,c.m = c.m,alpha1_mu = alpha1_mu,alpha2_mu = alpha2_mu,restaurants = restaurants,dishes = dishes,M_k = M_k,taus = taus,p.taus = p.taus,p.00 = p.00,p.0 = p.0,w = w,p.w = p.w)
+          #if t is new
+          if(!(t_c%in%restaurants[[j]][,1])){
+            #sample dish for new table
+            k_for_t.new <- kForNewTable4(j = j,dishes = dishes,L = pathways[[j]][[g]]$Lgm.hat[m],var.m = pathways[[j]][[g]]$var.gm[m],taus = taus,p.taus =p.taus,M_k = M_k,alpha1_mu = alpha1_mu,alpha2_mu = alpha2_mu,w = w,p.w = p.w,p.00 = p.00,p.0 = p.0)
+            #if k is new
+            if(!(k_for_t.new%in%dishes[,1])){
+              #sample a new parameter
+              mu.sigma.new <- new.parameter(L = pathways[[j]][[g]]$Lgm.hat[m],var.m = pathways[[j]][[g]]$var.gm[m],taus = taus,p.taus = p.taus,w = w,p.w = p.w,p.00 = p.00,p.0 = p.0)
+              mu_new <- mu.sigma.new$mu;sigma_new <- mu.sigma.new$sigma
+              dishes <- rbind(dishes, c(k_for_t.new,mu_new,sigma_new) )
+            }
+            restaurants[[j]] <- rbind(restaurants[[j]], c(t_c,k_for_t.new,dishes[dishes[,1]==k_for_t.new,2],dishes[dishes[,1]==k_for_t.new,3]) )
+            M_k <- updateM_k(dishes,M_k,j,restaurants)
+          }
+          clusters[[j]][[g]] <- rbind( clusters[[j]][[g]],c(c.m,t_c,restaurants[[j]][restaurants[[j]][,1]==t_c,2],restaurants[[j]][restaurants[[j]][,1]==t_c,3],restaurants[[j]][restaurants[[j]][,1]==t_c,4]) )
+        }
+        #update model parameters
+        pathways[[j]][[g]]$t[m] <- clusters[[j]][[g]][clusters[[j]][[g]][,1]==c.m,2]
+        pathways[[j]][[g]]$k[m] <- clusters[[j]][[g]][clusters[[j]][[g]][,1]==c.m,3]
+        pathways[[j]][[g]]$mu[m] <- clusters[[j]][[g]][clusters[[j]][[g]][,1]==c.m,4]
+        pathways[[j]][[g]]$sigma_g[m] <- clusters[[j]][[g]][clusters[[j]][[g]][,1]==c.m,5]
+        #remove empty clusters
+        clusters.to.remove <- setdiff(clusters[[j]][[g]][,1],pathways[[j]][[g]]$c)
+        if(length(clusters.to.remove)>0){
+          clusters[[j]][[g]] <- clusters[[j]][[g]][-which(clusters[[j]][[g]][,1] %in%  clusters.to.remove ),]
+          if(is.vector(clusters[[j]][[g]])){
+            clusters[[j]][[g]] <- matrix(data = clusters[[j]][[g]],ncol = 5)
+            colnames(clusters[[j]][[g]]) <- c("cluster","table","dish","mu","sigma")
+          }
+        }
+        #update relevant parameters
+        # if(init==1){
+        #   taus.counts <- updataTauCounts2(taus,clusters,pathways)
+        #   p.taus <- (taus.counts+1/length(taus))/(sum(taus.counts)+1)
+        # }
+        # abcd <- update.abcd(clusters);a <- abcd$a;b <- abcd$b;c <- abcd$c;d <- abcd$d
+        }
+      }
+      #remove empty tables
+      tables.to.remove <- setdiff(restaurants[[j]][,1],unique(unlist(sapply(clusters[[j]], function(g){g[,2]}))))
+      if(length(tables.to.remove)>0){
+        restaurants[[j]] <- restaurants[[j]][-which(restaurants[[j]][,1]%in% tables.to.remove),]
+        if(is.vector(restaurants[[j]])){
+          restaurants[[j]] <- matrix(data = restaurants[[j]],ncol =4)
+          colnames(restaurants[[j]]) <- c("table","dish","mu","sigma")
+        }
+      }
+      M_k <- updateM_k(dishes,M_k,j,restaurants)
+      #remove unused dishes
+      dishes.to.remove <- which(colSums(M_k)==0)
+      if(length(dishes.to.remove)>0){
+        M_k <- M_k[,-dishes.to.remove]
+        dishes <- dishes[-dishes.to.remove,]
+        if(is.vector(dishes)){
+          dishes <- matrix(data = dishes,ncol = 3)
+          colnames(dishes) <- c("k","mu","sigma")
+          M_k <- matrix(data = M_k,nrow = J)
+          colnames(M_k) <- dishes[,1]
+        } 
+      }
+    }
+  }
+  
+  # update table assignments for clusters
+  for (j in 1:J) {
+    for (g in 1:length(pathways[[j]])) {
+      #j <- 5;g <- 23
+      for (c.m in clusters[[j]][[g]][,1]) {
+        t_c <- sample_t_c(pathways = pathways,j = j,g = g,c.m = c.m,alpha1_mu = alpha1_mu,alpha2_mu = alpha2_mu,restaurants = restaurants,dishes = dishes,M_k = M_k,taus = taus,p.taus = p.taus,p.00 = p.00,p.0 = p.0,w = w,p.w = p.w)
+        #t_c <- nextIndix(restaurants[[j]][,1])
+        L <- pathways[[j]][[g]]$Lgm.hat[pathways[[j]][[g]]$c==c.m]
+        var.m <- pathways[[j]][[g]]$var.gm[pathways[[j]][[g]]$c==c.m]
+        #if t is new
+        if(!(t_c%in%restaurants[[j]][,1])){
+          #sample dish for new table
+          k_for_t.new <- kForNewTable4(j = j,dishes = dishes,L = L,var.m = var.m,taus = taus,p.taus =p.taus,M_k = M_k,alpha1_mu = alpha1_mu,alpha2_mu = alpha2_mu,w = w,p.w = p.w,p.00 = p.00,p.0 = p.0)
+          #if k is new
+          if(!(k_for_t.new%in%dishes[,1])){
+            #sample a new parameter
+            mu.sigma.new <- new.parameter(L = L,var.m = var.m,taus = taus,p.taus = p.taus,w = w,p.w = p.w,p.00 = p.00,p.0 = p.0)
+            mu_new <- mu.sigma.new$mu;sigma_new <- mu.sigma.new$sigma
+            dishes <- rbind(dishes, c(k_for_t.new,mu_new,sigma_new) )
+            }
+          restaurants[[j]] <- rbind(restaurants[[j]], c(t_c,k_for_t.new,dishes[dishes[,1]==k_for_t.new,2],dishes[dishes[,1]==k_for_t.new,3]) )
+          M_k <- updateM_k(dishes,M_k,j,restaurants)
+        }
+        clusters[[j]][[g]][clusters[[j]][[g]][,1]==c.m,2] <- t_c
+        clusters[[j]][[g]][clusters[[j]][[g]][,1]==c.m,3] <- restaurants[[j]][restaurants[[j]][,1]==t_c,2]
+        clusters[[j]][[g]][clusters[[j]][[g]][,1]==c.m,4] <- restaurants[[j]][restaurants[[j]][,1]==t_c,3]
+        clusters[[j]][[g]][clusters[[j]][[g]][,1]==c.m,5] <- restaurants[[j]][restaurants[[j]][,1]==t_c,4]
+        pathways[[j]][[g]]$t[pathways[[j]][[g]]$c==c.m] <- t_c
+        pathways[[j]][[g]]$k[pathways[[j]][[g]]$c==c.m] <- clusters[[j]][[g]][clusters[[j]][[g]][,1]==c.m,3]
+        pathways[[j]][[g]]$mu[pathways[[j]][[g]]$c==c.m] <- clusters[[j]][[g]][clusters[[j]][[g]][,1]==c.m,4]
+        pathways[[j]][[g]]$sigma_g[pathways[[j]][[g]]$c==c.m] <- clusters[[j]][[g]][clusters[[j]][[g]][,1]==c.m,5]
+        #update relevant parameters
+        # if(init==1){
+        #     taus.counts <- updataTauCounts2(taus,clusters,pathways)
+        #     p.taus <- (taus.counts+1/length(taus))/(sum(taus.counts)+1)
+        #   }
+        # abcd <- update.abcd(clusters);a <- abcd$a;b <- abcd$b;c <- abcd$c;d <- abcd$d
+      }
+      #remove empty tables
+      tables.to.remove <- setdiff(restaurants[[j]][,1],unique(unlist(sapply(clusters[[j]], function(g){g[,2]}))))
+      if(length(tables.to.remove)>0){
+        restaurants[[j]] <- restaurants[[j]][-which(restaurants[[j]][,1]%in% tables.to.remove),]
+        if(is.vector(restaurants[[j]])){
+          restaurants[[j]] <- matrix(data = restaurants[[j]],ncol =4)
+          colnames(restaurants[[j]]) <- c("table","dish","mu","sigma")
+        }
+      }
+      M_k <- updateM_k(dishes,M_k,j,restaurants)
+      #remove unused dishes
+      dishes.to.remove <- which(colSums(M_k)==0)
+      if(length(dishes.to.remove)>0){
+        M_k <- M_k[,-dishes.to.remove]
+        dishes <- dishes[-dishes.to.remove,]
+        if(is.vector(dishes)){
+          dishes <- matrix(data = dishes,ncol = 3)
+          colnames(dishes) <- c("k","mu","sigma")
+          M_k <- matrix(data = M_k,nrow = J)
+          colnames(M_k) <- dishes[,1]
+        } 
+      }
+    }
+  }
+
+  #updata k for t
+  for(j in 1:J){
+    for (i in 1:nrow(restaurants[[j]])) {
+      t <- restaurants[[j]][i,1]
+      L <- unlist(sapply(pathways[[j]], function(g){g$Lgm.hat[g$t==t]}))
+      var.m <- unlist(sapply(pathways[[j]], function(g){g$var.gm[g$t==t]}))
+      k_for_t <- kForNewTable4(j = j,dishes = dishes,L = L,var.m = var.m,taus = taus,p.taus =p.taus,M_k = M_k,alpha1_mu = alpha1_mu,alpha2_mu = alpha2_mu,w = w,p.w = p.w,p.00 = p.00,p.0 = p.0)
+      #if k is new
+      if(!(k_for_t%in%dishes[,1])){
+        #sample a new parameter
+        mu.sigma.new <- new.parameter(L = L,var.m = var.m,taus = taus,p.taus = p.taus,w = w,p.w = p.w,p.00 = p.00,p.0 = p.0)
+        mu_new <- mu.sigma.new$mu;sigma_new <- mu.sigma.new$sigma
+        dishes <- rbind(dishes, c(k_for_t,mu_new,sigma_new) )
+      }
+      restaurants[[j]][i,2] <- k_for_t
+      restaurants[[j]][i,3] <- dishes[dishes[,1]==k_for_t,2]
+      restaurants[[j]][i,4] <- dishes[dishes[,1]==k_for_t,3]
+      M_k <- updateM_k(dishes,M_k,j,restaurants)
+      #update model paremeters
+      for (g in 1:length(pathways[[j]])) {
+        #g <- 2
+        if(sum(clusters[[j]][[g]][,2]==t)>0){
+          clusters[[j]][[g]][clusters[[j]][[g]][,2]==t,3] <- k_for_t
+          clusters[[j]][[g]][clusters[[j]][[g]][,2]==t,4] <- dishes[dishes[,1]==k_for_t,2]
+          clusters[[j]][[g]][clusters[[j]][[g]][,2]==t,5] <- dishes[dishes[,1]==k_for_t,3]
+          pathways[[j]][[g]]$k[pathways[[j]][[g]]$t==t] <- k_for_t
+          pathways[[j]][[g]]$mu[pathways[[j]][[g]]$t==t] <- dishes[dishes[,1]==k_for_t,2]
+          pathways[[j]][[g]]$sigma_g[pathways[[j]][[g]]$t==t] <- dishes[dishes[,1]==k_for_t,3]
+          #update relevant parameters
+          # if(init==1){
+          #     taus.counts <- updataTauCounts2(taus,clusters,pathways)
+          #     p.taus <- (taus.counts+1/length(taus))/(sum(taus.counts)+1)
+          #   }
+          # abcd <- update.abcd(clusters);a <- abcd$a;b <- abcd$b;c <- abcd$c;d <- abcd$d
+        }
+      }
+    }
+  }
+  #remove unused dishes
+  dishes.to.remove <- which(colSums(M_k)==0)
+  if(length(dishes.to.remove)>0){
+    M_k <- M_k[,-dishes.to.remove]
+    dishes <- dishes[-dishes.to.remove,]
+    if(is.vector(dishes)){
+      dishes <- matrix(data = dishes,ncol = 3)
+      colnames(dishes) <- c("k","mu","sigma")
+      M_k <- matrix(data = M_k,nrow = J)
+      colnames(M_k) <- dishes[,1]
+    } 
+  }
+  
+  if(iter>round(record/2)){
+    #update p.outlier
+  p.outlier <- (p.outlier.alpha+sum( PCHs[iter,] ))/(p.outlier.alpha+p.outlier.beta+ncol(PCHs))
+  #update concentration parameters using grid
+  if(updateAlpha==TRUE){
+    if(iter>=record){
+      Tj <- sapply(restaurants, function(j){nrow(j)})
+      nj <- sapply(1:J, function(j){sum(sapply(clusters[[j]], function(g){nrow(g)}))})
+      num.tabkes <- sum(Tj)
+      num.dishes <- nrow(dishes)
+      
+      #super
+      p.alpha1 <- dgamma(x = alpha.grid,shape = alpha1.a,rate = alpha1.b)*alpha.grid^num.dishes*gamma(alpha.grid)/gamma(alpha.grid+num.tabkes)
+      alpha1_mu <- sample(x = alpha.grid,size = 1,prob = p.alpha1)
+      #sub
+      p.alpha2 <- sapply(1:length(alpha.grid), function(i){dgamma(x = alpha.grid[i],shape = alpha2.a,rate = alpha2.b)*alpha.grid[i]^num.tabkes* prod( gamma(alpha.grid[i])/gamma(alpha.grid[i]+nj) ) })
+      alpha2_mu <- sample(x = alpha.grid,size = 1,prob = p.alpha2)
+    }
+  }
+  #update p0 and p00
+  num.spike <- 0
+  num.mean0 <- 0
+  num.path <- 0
+  for (j in 1:J) {
+    for (g in 1:length(pathways[[j]])) {
+      k.g <- unique(pathways[[j]][[g]]$k);k.g <- k.g[k.g!=0]
+      if(length(k.g)==1){
+        num.path <- num.path + 1
+        mu.g <- dishes[dishes[,1]==k.g,2];sigma.g <- dishes[dishes[,1]==k.g,3]
+        if(mu.g==0){
+        if(sigma.g==0){
+          num.spike <- num.spike+1
+        }else{
+          num.mean0 <- num.mean0+1
+        }
+      }
+      }
+    }
+  }
+  p.00 <- rbeta(n = 1,shape1 = 1+num.spike,shape2 = 1+num.path-num.spike)
+  p.0 <- rbeta(n = 1,shape1 = 1+num.mean0,shape2 = 1+num.path-num.spike-num.mean0)
+  }
+  
+  #update mus
+  for (k in 1:nrow(dishes)) {
+    #k <- 1
+    k_mu <- dishes[k,1]
+    meta.list <- select.all.metabolites(k_mu,pathways)
+    mu.sigma.new <- new.parameter(L = meta.list$L.hat,var.m = meta.list$var.m,taus = taus,p.taus = p.taus,w = w,p.w = p.w,p.00 = p.00,p.0 = p.0)
+    dishes[k,2] <- mu.sigma.new$mu;dishes[k,3] <- mu.sigma.new$sigma
+  }
+  for(j in 1:J){
+    for (i in 1:nrow(restaurants[[j]])) {
+      restaurants[[j]][i,3] <- dishes[dishes[,1]==restaurants[[j]][i,2],2]
+      restaurants[[j]][i,4] <- dishes[dishes[,1]==restaurants[[j]][i,2],3]
+    }
+    for (g in 1:length(pathways[[j]])) {
+      for (c in clusters[[j]][[g]][,1]) {
+        #update sigma_c
+        k <- clusters[[j]][[g]][clusters[[j]][[g]][,1]==c,3]
+        pathways[[j]][[g]]$mu[pathways[[j]][[g]]$c==c] <- dishes[which(dishes[,1]==k),2]
+        pathways[[j]][[g]]$sigma_g[pathways[[j]][[g]]$c==c] <- dishes[which(dishes[,1]==k),3]
+        clusters[[j]][[g]][clusters[[j]][[g]][,1]==c,4] <- dishes[which(dishes[,1]==k),2]
+        clusters[[j]][[g]][clusters[[j]][[g]][,1]==c,5] <- dishes[which(dishes[,1]==k),3]
+      }
+    }
+  }
+  #update relevant parameters
+  # if(init==1){
+  #     taus.counts <- updataTauCounts2(taus,clusters,pathways)
+  #     p.taus <- (taus.counts+1/length(taus))/(sum(taus.counts)+1)
+  # }
+  abcd <- update.abcd(clusters);a <- abcd$a;b <- abcd$b;c <- abcd$c;d <- abcd$d
+  
+  if(iter>=record){
+    num.clusters <- c(num.clusters,nrow(dishes))
+    mus <- vector()
+    var.gm<- vector()
+    k.meta <- vector()
+    k.sub <- vector()
+    post.L <- vector()
+    post.L2 <- vector()
+    mu.g <- vector()
+    sigma.g <- vector()
+    for (j in 1:J) {
+      for (g in 1:length(pathways[[j]])) {
+        #k.meta <- c(k.meta,pathways[[j]][[g]]$k)
+        k.g <- as.numeric(names(which.max(table(pathways[[j]][[g]][["k"]]))))
+        k.sub <- c(k.sub,k.g)
+        if(nrow(clusters[[j]][[g]])==0){
+          #print(paste0(j,":",g))
+          mus <- c(mus,pathways[[j]][[g]]$Lgm.hat)
+          mu.g[pathways[[j]][[g]]$g] <- mean(pathways[[j]][[g]]$Lgm.hat)
+          sigma.g[pathways[[j]][[g]]$g] <- sd(pathways[[j]][[g]]$Lgm.hat)
+        }else{
+          mus <- c(mus,rep(clusters[[j]][[g]][1,4],pathways[[j]][[g]]$Mg))
+          mu.g[pathways[[j]][[g]]$g] <- clusters[[j]][[g]][1,4]
+          sigma.g[pathways[[j]][[g]]$g] <- clusters[[j]][[g]][1,5]
+        }
+        
+        if(sum(pathways[[j]][[g]]$mu==0 & pathways[[j]][[g]]$sigma_g==0)>pathways[[j]][[g]]$Mg/2){
+          pathways[[j]][[g]]$is.spike <- c(pathways[[j]][[g]]$is.spike,1)
+          post.L <- c(post.L,rep(0,pathways[[j]][[g]]$Mg)  )
+          post.L2 <- c(post.L2,rep(0,pathways[[j]][[g]]$Mg))
+        }else{
+          pathways[[j]][[g]]$is.spike <- c(pathways[[j]][[g]]$is.spike,0)
+          post.var <- 1/(1/pathways[[j]][[g]]$var.gm+1/pathways[[j]][[g]]$sigma_g^2)
+          post.mean <- (pathways[[j]][[g]]$Lgm.hat/pathways[[j]][[g]]$var.gm +pathways[[j]][[g]]$mu/pathways[[j]][[g]]$sigma_g^2   )*post.var
+          post.L <- c(post.L,post.mean  )
+          post.L2 <- c(post.L2,post.mean^2+post.var)
+        }
+      }
+    }
+    postL[iter-record+1,] <-post.L
+    postL2[iter-record+1,] <-post.L2
+    Mus[iter-record+1,] <- mus
+    Mu.g[iter-record+1,] <- mu.g
+    Sigma.g[iter-record+1,] <- sigma.g
+    #Taus.counts[iter-record+1,] <- taus.counts
+    for (k.sub.i in unique(k.sub)) {
+      Community[k.sub==k.sub.i,k.sub==k.sub.i] <- Community[k.sub==k.sub.i,k.sub==k.sub.i]+1
+    }
+    if(length(names(table(k.sub))[table(k.sub)==1])>0){
+      Is.singleton[which(k.sub%in%names(table(k.sub))[table(k.sub)==1])] <- Is.singleton[which(k.sub%in%names(table(k.sub))[table(k.sub)==1])]+1
+    }
+    
+    }
+  } 
+}
+  #k.latent <- 1
+  #randomly permutate true labels
+  clusters.true.k <- clusters.true[[column.orders[k.latent]]]
+  clusters.true.k <- clusters.true.k[sample(1:length(clusters.true.k), replace=FALSE)]
+  clusters.true.k <- sapply(unique(clusters.true.k), function(xxx){unique(IDs$SUB_PATHWAY)[clusters.true.k==xxx]})
+  
+  
+  p.is.singleton <- Is.singleton/(Iter-record+1)
+  w <- 1-Community/(Iter-record+1)#dissimilarity matrix
+  subpathways <- unlist(sapply(1:length(pathways), function(j){ sapply(1:length(pathways[[j]]), function(g){ pathways[[j]][[g]]$Subpathway }) }))
+  colnames(w) <- subpathways;rownames(w)<- subpathways
+  #clusters.est.k <- greedyCluster(w = w,method = "min",threshold = 0.5,include.singleton=T)
+  clusters.est.k <- greedyCluster(w = w,method = "min",threshold = 0.5,include.singleton=T,p.singleton = p.is.singleton)
+  InclusionRates.5[k.latent,num.simu] <- inclusionRate(clusters.true.k,clusters.est.k )
+  CoverageRates.5[k.latent,num.simu] <- coverageRate(clusters.true.k,clusters.est.k )
+  # NMI.5[k.latent,num.simu] <- aricode::NMI(clusters.true[[column.orders[k.latent]]] , sapply(subpathways, function(xxx){ which(sapply(clusters.est.k,function(zzz){xxx%in%zzz})) }) ,variant = "sum")
+  # ARI.5[k.latent,num.simu] <- adjustedRandIndex(clusters.true[[column.orders[k.latent]]], sapply(subpathways, function(xxx){ which(sapply(clusters.est.k,function(zzz){xxx%in%zzz})) }))
+
+  clusters.est.k <- greedyCluster(w = w,method = "min",threshold = 0.25,include.singleton=T)
+  InclusionRates.25[k.latent,num.simu] <- inclusionRate(clusters.true.k,clusters.est.k )
+  CoverageRates.25[k.latent,num.simu] <- coverageRate(clusters.true.k,clusters.est.k )
+  # NMI.25[k.latent,num.simu] <- aricode::NMI(clusters.true[[column.orders[k.latent]]] , sapply(subpathways, function(xxx){ which(sapply(clusters.est.k,function(zzz){xxx%in%zzz})) }) ,variant = "sum")
+  # ARI.25[k.latent,num.simu] <- adjustedRandIndex(clusters.true[[column.orders[k.latent]]], sapply(subpathways, function(xxx){ which(sapply(clusters.est.k,function(zzz){xxx%in%zzz})) }))
+
+  clusters.est.k <- greedyCluster(w = w,method = "min",threshold = 0.75,include.singleton=T)
+  InclusionRates.75[k.latent,num.simu] <- inclusionRate(clusters.true.k,clusters.est.k )
+  CoverageRates.75[k.latent,num.simu] <- coverageRate(clusters.true.k,clusters.est.k )
+  # NMI.75[k.latent,num.simu] <- aricode::NMI(clusters.true[[column.orders[k.latent]]] , sapply(subpathways, function(xxx){ which(sapply(clusters.est.k,function(zzz){xxx%in%zzz})) }) ,variant = "sum")
+  # ARI.75[k.latent,num.simu] <- adjustedRandIndex(clusters.true[[column.orders[k.latent]]], sapply(subpathways, function(xxx){ which(sapply(clusters.est.k,function(zzz){xxx%in%zzz})) }))
+
+  clusters.est.k <- greedyCluster(w = w,method = "min",threshold = 0.95,include.singleton=T)
+  InclusionRates.95[k.latent,num.simu] <- inclusionRate(clusters.true.k,clusters.est.k )
+  CoverageRates.95[k.latent,num.simu] <- coverageRate(clusters.true.k,clusters.est.k )
+  # NMI.95[k.latent,num.simu] <- aricode::NMI(clusters.true[[column.orders[k.latent]]] , sapply(subpathways, function(xxx){ which(sapply(clusters.est.k,function(zzz){xxx%in%zzz})) }) ,variant = "sum")
+  # ARI.95[k.latent,num.simu] <- adjustedRandIndex(clusters.true[[column.orders[k.latent]]], sapply(subpathways, function(xxx){ which(sapply(clusters.est.k,function(zzz){xxx%in%zzz})) }))
+  
+}
+  
+}
+
+
+save(list = c("InclusionRates.5","CoverageRates.5","NMI.5","InclusionRates.25","CoverageRates.25","NMI.25","InclusionRates.75","CoverageRates.75","NMI.75","InclusionRates.95","CoverageRates.95","NMI.95","L.parameters","ARI.5","ARI.25","ARI.75","ARI.95","K","Num.simu"),file = "results/simu23_random_cluster.RData")
+```
+
+
+```{r}
+load("results/simu23_random_cluster.RData")
+K <- 10
+data.i.correct <- data.frame(t(InclusionRates.5))
+colnames(data.i.correct) <- c(1:K)
+
+data.c.correct <- data.frame(t(CoverageRates.5))
+colnames(data.c.correct) <- c(1:K)
+
+data.n.correct <- data.frame(t(NMI.5))
+colnames(data.n.correct) <- c(1:K)
+
+data.a.correct <- data.frame(t(ARI.5))
+colnames(data.a.correct) <- c(1:K)
+
+boxplot(data.i.correct,ylim=c(0,1),main="Inclusion rates, threshold=0.5")
+boxplot(data.c.correct,ylim=c(0,1),main="Coverage rates, threshold=0.5")
+boxplot(data.n.correct,ylim=c(0,1),main="NMI, threshold=0.5")
+boxplot(data.a.correct,ylim=c(0,1),main="ARI, threshold=0.5")
+```
+
+Plot the coverage and inclusion rates for all columns.
+```{r}
+load("results/simu23_random_cluster.RData")
+value <- c(as.vector(t(InclusionRates.5)),as.vector(t(CoverageRates.5)))
+factor.index <- rep(rep(as.factor(c(1:K)),each=Num.simu),2)
+Metric <- rep(c("Inclusion rates","Coverage rates"),each=Num.simu*K)
+
+data <- data.frame(value,factor.index,Metric)
+
+library(ggplot2)
+#pdf(file = "simu_L_Cluster_inc&cov_clustered_permutated.pdf",width = 10,height = 6)
+ggplot(data = data, aes(x=factor.index, y=value)) + geom_boxplot(aes(fill=Metric),width=0.4,position = position_dodge(width=0.5)) + ylim(0.25,1) + xlab("Factor index")+ ylab("Value")
+#dev.off()
+```
+
+```{r}
+load("~/R/mtGWAS_N5000/results/simu18_correct_variance_reorder.RData")
+
+value <- c(as.vector(t(InclusionRates.5)),as.vector(t(CoverageRates.5)))
+factor.index <- rep(rep(as.factor(c(1:K)),each=Num.simu),2)
+Metric <- rep(c("Inclusion rates","Coverage rates"),each=Num.simu*K)
+
+data <- data.frame(value,factor.index,Metric)
+
+library(ggplot2)
+#pdf(file = "simu_L_Cluster_inc&cov_clustered.pdf",width = 10,height = 6)
+ggplot(data = data, aes(x=factor.index, y=value)) + geom_boxplot(aes(fill=Metric),width=0.4,position = position_dodge(width=0.5)) + ylim(0.25,1) + xlab("Factor index")+ ylab("Value")
+#dev.off()
+```

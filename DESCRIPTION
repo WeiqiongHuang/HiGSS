@@ -14,6 +14,9 @@ Imports:
   invgamma,
   LaplacesDemon,
   matrixStats,
+  MASS,
+  pracma,
+  rmatio,
   RMTstat,
   stats
 RoxygenNote: 7.3.1

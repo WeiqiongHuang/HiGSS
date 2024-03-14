@@ -1,0 +1,288 @@
+---
+title: "Simulate G from heavier tails dist"
+output: html_document
+date: "2023-12-20"
+---
+
+Load necessary packages and functions.
+
+Simulate super-pathways and sub-pathways. The number of super-pathways is $J=5$, the total number of metabolites is 390.
+
+```{r setup, include=FALSE}
+library(LaplacesDemon)
+library(invgamma)
+source("funcs/simulations.R")
+library(e1071)  
+source("funcs/funcs13.R")
+library(extraDistr)
+
+J <- 5; 
+set.seed(3)
+SUPER_PATHWAY <- vector()
+SUB_PATHWAY <- vector()
+for (j in 1:J) {
+  G <- rpois(n = 1,lambda = 8)
+  for (g in 1:G) {
+    mg <- ifelse(rpois(n = 1,lambda = 10)>13,rpois(n = 10,lambda = 30),rpois(n = 5,lambda = 10))
+    SUB_PATHWAY <- c(SUB_PATHWAY, rep(paste0(j,":",g),mg))
+    SUPER_PATHWAY <- c(SUPER_PATHWAY, rep(j,mg))
+  }
+}
+metabolites <- (cbind(SUPER_PATHWAY,SUB_PATHWAY,c(1:length(SUPER_PATHWAY))))
+colnames(metabolites) <- c("SUPER_PATHWAY","SUB_PATHWAY","metabolite")
+metabolites <- as.data.frame(metabolites)
+
+seeds <- c(1,2,3,5,7,9,11,12,20,22)
+K <- 10;K.hat <- K
+N <- 1000;S <- 10000
+num.metabolites <- nrow(metabolites)
+p.0 <- rbeta(n = K,shape1 = 2,shape2 = 1)
+sigma.alt <- runif(n = K,min = 6,max = 9)
+L.true <- matrix(data = NA,nrow = num.metabolites,ncol = K)
+L.parameters <- list();clusters.true <- list()
+for (k in 1:K) {
+  set.seed(seeds[k])
+  simu.L <- rHDP(metabolites = metabolites,gamma = 4,alpha0 = 2,p.00 = 0.05,b.l = -6,b.u = 6,p.0 = p.0[k],p.out = 0,tau = 10,sigma.alpha = 3,sigma.beta = 2)
+  L.parameters[[k]] <- simu.L
+  L.true[,k] <- simu.L$L
+  clusters.true[[k]] <- simu.L$K.sub
+}
+# regenerate.parameters <- list(L.parameters,column.orders)
+# names(regenerate.parameters) <- c("L.parameters","column.orders")
+column.orders <- order(colSums(L.true^2),decreasing = T)
+L.true <- L.true[,column.orders]
+
+sigSNPs <- rbern(n = S*K,prob = 0.005)
+#gaussian entries
+G <- matrix(data=ifelse(sigSNPs==1,rnorm(n = S*K,mean = 0,sd = sigma.alt/sqrt(N)),0), nrow = S, ncol = K,byrow = T)
+#laplace entries
+#G <- matrix(data=ifelse(sigSNPs==1,rlaplace(n = S*K,mu = 0,sigma = sigma.alt[k]/sqrt(2*N)),0), nrow = S, ncol = K,byrow = T)
+
+
+sigSNPs <- matrix(data=sigSNPs, nrow = S, ncol = K,byrow = T)
+sigSNPs <- rowSums(sigSNPs)>0
+X <- simuGenotype(N = N,S = S)$X
+X <- X-rowMeans(X)%*%t(rep(1,N))
+Dss = rowSums(X^2)
+Theta <- matrix(data = rnorm(n = N*K,mean = 0,sd = 1),nrow = N,ncol = K)
+C <- t(X)%*%G+Theta
+#C <- Theta
+
+SigmaSquare <- rgamma(n = num.metabolites,shape = 1,rate = 1)# mean = 1
+E <- matrix(data = rnorm(n = N*num.metabolites,mean = 0,sd = rep(sqrt(SigmaSquare),N)),nrow = num.metabolites,ncol = N)
+L.true <- L.true/sqrt(eigen(L.true%*%t(L.true))[[1]][K]*N/eigen(E%*%t(E))[[1]][1]/1.2)
+
+IDs <- metabolites
+for (k in 1:K) {
+  plot(L.true[,k],pch=ifelse(L.true[,k]==0,17,19),col= match(IDs$SUB_PATHWAY,cbind(unique(IDs$SUB_PATHWAY), c(1:length(unique(IDs$SUB_PATHWAY))) )));abline(h=0)
+}
+```
+
+
+rotate G.bar to match G.hat
+```{r}
+set.seed(2)
+K <- 10
+N <- 1000;S <- 10000
+m <- nrow(metabolites)
+LFSR <- list();SIGSNP <- list()
+sigSNPs.Bonferroni <- list()
+for (i in 1:50) {
+  L.true <- matrix(data = NA,nrow = num.metabolites,ncol = K)
+  for (k in 1:K) {
+    L.true[,k] <- rnorm(n = num.metabolites,mean = L.parameters[[k]]$mu,L.parameters[[k]]$sd)
+  }
+  column.orders <- order(colSums(L.true^2),decreasing = T)
+  L.true <- L.true[,column.orders]
+  
+  Theta <- matrix(data = rnorm(n = N*K,mean = 0,sd = 1),nrow = N,ncol = K)
+  sigSNPs <- rbern(n = S*K,prob = 0.005)
+  
+  #gaussian entries
+  #G <- matrix(data=ifelse(sigSNPs==1,rnorm(n = S*K,mean = 0,sd = sigma.alt[k]/sqrt(N)),0), nrow = S, ncol = K,byrow = T)
+  #laplace entries
+  G <- matrix(data=ifelse(sigSNPs==1,rlaplace(n = S*K,mu = 0,sigma = sigma.alt[k]/sqrt(2*N)),0), nrow = S, ncol = K,byrow = T)
+
+  sigSNPs <- matrix(data=sigSNPs, nrow = S, ncol = K,byrow = T)
+  #sigSNPs <- rowSums(sigSNPs)>0
+  X <- simuGenotype(N = N,S = S)$X
+  X <- X-rowMeans(X)%*%t(rep(1,N))
+  Dss = rowSums(X^2)
+  C <- t(X)%*%G+Theta
+  #C <- Theta
+  
+  SigmaSquare <- rgamma(n = m,shape = 1,rate = 1)# mean = 1
+  E <- matrix(data = rnorm(n = N*m,mean = 0,sd = rep(sqrt(SigmaSquare),N)),nrow = m,ncol = N)
+  L.true <- L.true/sqrt(eigen(L.true%*%t(L.true))[[1]][K]*N/eigen(E%*%t(E))[[1]][1]/1.2)
+  #L.true <- L.true*0.1
+  Delta <- simuDelta(S = S,metabolites = metabolites,Dss = Dss,p0 =0.3,SigmaSquare = SigmaSquare)
+
+  M <- as.matrix(L.true%*%t(C))+Delta%*%X+E
+  #M <- as.matrix(L%*%t(C))+E
+  M <- M-rowMeans(M)%*%t(rep(1,N))
+  B.hat <- M%*%t(X);B.hat <- sapply(1:S, function(s) B.hat[,s]/sqrt(Dss[s]))
+  #bonferroni
+  sigSNPs.Bonferroni[[i]] <- which( 2*pnorm(-abs(B.hat))<0.05/m/S ,arr.ind = T)
+  
+  B.svd <- svd(B.hat)
+  #plot(B.svd$d)
+  G.bar <- B.svd$v[,1:K]*sqrt(S)
+  G.hat <- X%*%C;G.hat <- sapply(1:S, function(s){  G.hat[s,]/sqrt(Dss[s]) });G.hat <- t(G.hat)
+  
+  U <- svd(t(G.bar)%*%G.hat)$u;V <- svd(t(G.bar)%*%G.hat)$v
+  A <- U%*%t(V)
+  
+  G.bar <- G.bar%*%A
+  lfsr <- matrix(nrow = S,ncol = K)
+  for (k in 1:K) {
+    test <- fitMixGaussian3(G =G.bar[,k],init_sigma = c(1,1.3),init_pi = c(0.99,0.01),fix.sigma1 = TRUE,0.05)
+    lfsr[,k] <- test$lfsr
+  }
+  LFSR[[i]] <- lfsr;SIGSNP[[i]] <- sigSNPs
+}
+#save(list = c("K","sigSNPs.Bonferroni","LFSR","SIGSNP"),file = "results/simu20_laplace_0.1_seed2.RData")
+#save.image("results/simu20_laplace.RData")
+```
+
+draw a unique line for each factor
+```{r}
+#load("results/simu20_laplace_0.1_seed2.RData")
+# bins <- list(c(0,0.01),c(0.01,0.05),c(0.05,0.1),c(0.1,0.15),c(0.15,0.2),c(0.2,0.25),c(0.25,0.3),c(0.3,0.35),c(0.35,0.4),c(0.4,0.45),c(0.45,0.5),c(0.5,0.55),c(0.55,0.6),c(0.6,0.65),c(0.65,0.7),c(0.7,0.75),c(0.75,0.8),c(0.8,0.85),c(0.85,0.9),c(0.9,0.95),c(0.95,1))
+# bins <- list(c(0,0.01),c(0.01,0.05),c(0.05,0.1),c(0.1,0.15),c(0.15,0.2),c(0.2,0.25),c(0.25,0.3),c(0.3,0.35),c(0.35,0.4),c(0.4,0.45),c(0.45,0.5))
+bins <- list(c(0,0.01),c(0.01,0.05),c(0.05,0.1),c(0.1,0.15),c(0.15,0.2),c(0.2,0.25),c(0.25,0.3))
+x <- list();y <- list()
+for (k in 1:K) {
+  x[[k]] <- list();y[[k]] <- list()
+}
+for (i in 1:length(LFSR)) {
+  #i <- 1
+  lfsr <- LFSR[[i]];sigSNPs <- SIGSNP[[i]]
+  for (j in 1:length(bins)) {
+    b <- bins[[j]]
+    for (k in 1:K) {
+      if(length(x[[k]])<j){
+        x[[k]][[j]] <- lfsr[,k][lfsr[,k]<b[2] & lfsr[,k]>b[1]]
+        y[[k]][[j]] <- sum(sigSNPs[,k][lfsr[,k]<b[2] & lfsr[,k]>b[1]]==0)
+      }else{
+        x[[k]][[j]] <- c(x[[k]][[j]],lfsr[,k][lfsr[,k]<b[2] & lfsr[,k]>b[1]])
+        y[[k]][[j]] <- y[[k]][[j]]+sum(sigSNPs[,k][lfsr[,k]<b[2] & lfsr[,k]>b[1]]==0)
+      }
+    }
+  }
+}
+
+MyOrder = matrix(1:10, nrow=2, ncol=5, byrow=T)
+col.factor <- c("grey1","khaki4","navy","red1","salmon1","yellow3","green1","turquoise1","dodgerblue","darkviolet")
+x.max <- max(sapply(1:K, function(k){sapply(x[[k]], function(i){mean(i)})}))
+#pdf(file = 'simu_G_FDP_laplace.pdf',width = 6,height = 6)
+#pdf(file = 'simu_G_FDP_gaussian.pdf',width = 6,height = 6)
+plot(x = c(),y=c(),xlim=c(0,x.max),ylim=c(0,x.max),xlab="Nominal local false sign rate bin",ylab="False discovery proportion",type="o")
+abline(a=0,b=1,col="red",lty=2)
+for (k in 1:K) {
+  lines(sapply(x[[k]], function(i){mean(i)}),sapply(y[[k]], function(i){sum(i)})/sapply(x[[k]], function(i){length(i)}),type="o",pch=15,col=col.factor[k])
+}
+#legend("topleft",legend = c(1:K),col = c(1:K),lty = 1)
+legend("topleft",legend = c(1:K)[MyOrder],fill= col.factor[MyOrder],ncol = 5,inset=.05,title="Factor index",cex=0.7,border=NA)
+#dev.off()
+```
+
+Comparing with naive Bonferroni
+```{r}
+bins <- list(c(0,0.05),c(0.05,0.1),c(0.1,0.15),c(0.15,0.2),c(0.2,0.25),c(0.25,0.3),c(0.3,0.35),c(0.35,0.4),c(0.4,0.45),c(0.45,0.5))
+x <- list();y <- list()
+for (i in 1:length(LFSR)) {
+  #i <- 1
+  lfsr <- LFSR[[i]];sigSNPs <- SIGSNP[[i]]
+  for (j in 1:length(bins)) {
+    b <- bins[[j]]
+    if(length(x)<j){
+      x[[j]] <- lfsr[lfsr<b[2] & lfsr>b[1]]
+      y[[j]] <- sum(sigSNPs[lfsr<b[2] & lfsr>b[1]]==0)
+    }else{
+      x[[j]] <- c(x[[j]],lfsr[lfsr<b[2] & lfsr>b[1]])
+      y[[j]] <- y[[j]]+sum(sigSNPs[lfsr<b[2] & lfsr>b[1]]==0)
+    }
+  }
+}
+
+
+plot(sapply(x, function(i){mean(i)}),sapply(y, function(i){sum(i)})/sapply(x, function(i){length(i)}),xlim=c(0,0.5),ylim=c(0,0.5),xlab="lfsr",ylab="FDR",type="o",pch=19)
+abline(a=0,b=1,col="red")
+abline(v=c(0:10)/20,lty=2)
+hist(LFSR[[i]][LFSR[[i]]<0.9])
+```
+
+gloable fsr
+```{r}
+GFSRs <- c(0.01,0.05,0.1,0.2,0.3,0.4,0.5)
+gfsr <- 0.05
+FDR <- sapply(1:K, function(k){
+  sapply(1:length(LFSR), function(i){
+    order.i.k <- order(LFSR[[i]][,k])
+    partial.mean <- 0;s <- 0
+    while (partial.mean<gfsr) {
+      s <- s+1;partial.mean <- mean(LFSR[[i]][,k][order.i.k][1:s])
+    }
+    1-sum(order(LFSR[[i]][,k])[1:s] %in% which(SIGSNP[[i]][,k]==1))/s
+})})
+
+data <- FDR
+colnames(data) <- c(1:K)
+data <- as.data.frame(data)
+boxplot(data);lines(x = 1:K,y = colMeans(FDR),col="red",lwd=2);abline(h=gfsr,lty=2)
+```
+
+```{r}
+gfsr <- 0.1
+FDR <- sapply(1:K, function(k){
+  sapply(1:length(LFSR), function(i){
+    order.i.k <- order(LFSR[[i]][,k])
+    partial.mean <- 0;s <- 0
+    while (partial.mean<gfsr) {
+      s <- s+1;partial.mean <- mean(LFSR[[i]][,k][order.i.k][1:s])
+    }
+    1-sum(order(LFSR[[i]][,k])[1:s] %in% which(SIGSNP[[i]][,k]==1))/s
+})})
+
+data <- FDR
+colnames(data) <- c(1:K)
+data <- as.data.frame(data)
+boxplot(data);lines(x = 1:K,y = colMeans(FDR),col="red",lwd=2);abline(h=gfsr,lty=2)
+```
+
+```{r}
+gfsr <- 0.2
+FDR <- sapply(1:K, function(k){
+  sapply(1:length(LFSR), function(i){
+    order.i.k <- order(LFSR[[i]][,k])
+    partial.mean <- 0;s <- 0
+    while (partial.mean<gfsr) {
+      s <- s+1;partial.mean <- mean(LFSR[[i]][,k][order.i.k][1:s])
+    }
+    1-sum(order(LFSR[[i]][,k])[1:s] %in% which(SIGSNP[[i]][,k]==1))/s
+})})
+
+data <- FDR
+colnames(data) <- c(1:K)
+data <- as.data.frame(data)
+boxplot(data);lines(x = 1:K,y = colMeans(FDR),col="red",lwd=2);abline(h=gfsr,lty=2)
+```
+
+```{r}
+gfsr <- 0.3
+FDR <- sapply(1:K, function(k){
+  sapply(1:length(LFSR), function(i){
+    order.i.k <- order(LFSR[[i]][,k])
+    partial.mean <- 0;s <- 0
+    while (partial.mean<gfsr) {
+      s <- s+1;partial.mean <- mean(LFSR[[i]][,k][order.i.k][1:s])
+    }
+    1-sum(order(LFSR[[i]][,k])[1:s] %in% which(SIGSNP[[i]][,k]==1))/s
+})})
+
+data <- FDR
+colnames(data) <- c(1:K)
+data <- as.data.frame(data)
+boxplot(data);lines(x = 1:K,y = colMeans(FDR),col="red",lwd=2);abline(h=gfsr,lty=2)
+```
+

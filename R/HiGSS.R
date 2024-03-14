@@ -1,3 +1,4 @@
+#
 # HiGSS <- function(B.hat,N,IDs){
 #
 #   est.K <- dBEMA(Stand.B = B.hat,N = N);K <- est.K$nFactors

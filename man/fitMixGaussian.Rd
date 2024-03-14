@@ -4,7 +4,14 @@
 \alias{fitMixGaussian}
 \title{Estimate the parameters in Gaussian mixture model for G.hat.}
 \usage{
-fitMixGaussian(G, init_sigma, init_pi, fix.sigma1 = TRUE, threshold.fsr = 0.05)
+fitMixGaussian(
+  G,
+  init_sigma,
+  init_pi,
+  fix.sigma1 = TRUE,
+  threshold.converage = 1e-05,
+  threshold.fsr = 0.05
+)
 }
 \arguments{
 \item{G}{G.hat. It will be standarded to have norm sqrt(S) if it's not.}

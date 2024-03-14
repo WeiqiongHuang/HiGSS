@@ -1,0 +1,4 @@
+"0","for (k in 1:K) {"
+"0","  plot(data$L[,k],col=match(IDs$SUB_PATHWAY,cbind(unique(IDs$SUB_PATHWAY), c(1:length(unique(IDs$SUB_PATHWAY))) )),pch=ifelse(colMeans(fit.L[[k]]$Outlier[,IDs$metabolite])>0.95,4,19  ));lines(unlist(sapply(unique(IDs$SUB_PATHWAY), function(xxx){rep(mean(fit.L[[k]]$Mean[,xxx]), sum(IDs$SUB_PATHWAY==xxx)  )})))"
+"0",""
+"0","}"

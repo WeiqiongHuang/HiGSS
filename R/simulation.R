@@ -9,14 +9,14 @@
 #' @param p.out Probability of generating outliers.
 #' @param common.spikes A vector of subpathway names. All entries of L belonging to those subpathway are set as 0. Default is NULL.
 #' @param regenerate.paras A list containing parameters to regenerate L. Default is NULL.
-#' @param fix.L.scaling Default is FALSE. The function will automatically scale L to make the signal strength compariable to noise level. If it's set as TRUE, 'L.scaling' must also be specified.
-#' @param L.scaling User specificed scalar to scale L.
-#' @param G.model Distribution of non-zero genetic effects. Can take values of either 'gaussian' or 'laplace'.
+#' @param fix.L.scaling Default is FALSE. The function will automatically scale L to make the signal strength comparable to noise level. If it's set as TRUE, 'L.scaling' must also be specified.
+#' @param L.scaling User specified scalar to scale L.
+#' @param G.model Distribution of non-zero genetic effects. Can take values of either 'Gaussian' or 'Laplace'.
 #' @param p.G.nonzero Probability of generating non-zero entries in G. Default is 0.005.
 #' @param p.Delta.0 Probability of non-genetically regulated metabolites in Delta. Default is 0.2.
-#' @return A list containg matrices in mtGWAS factor analysis model.
+#' @return A list containing matrices in mtGWAS factor analysis model.
 #' @export
-simuFactorModel <- function(IDs=NULL,J=5,K=10,N=1000,S=1e4,G.model=c("gaussian","laplace"),p.l.spike=0.05,p.G.nonzero=0.005,p.out = 0.01,p.Delta.0=0.2,common.spikes = NULL,regenerate.L=FALSE,regenerate.paras = NULL,fix.L.scaling = FALSE, L.scaling = NULL){
+simuFactorModel <- function(IDs=NULL,J=5,K=10,N=1000,S=1e4,G.model=c("gaussian","laplace"),p.l.spike=0.05,p.G.nonzero=0.005,p.out = 0.01,p.Delta.0=0.2,common.spikes = NULL,regenerate.L=FALSE,L.parameters = NULL,fix.L.scaling = FALSE, L.scaling = NULL){
   if(is.null(IDs)){
     #simulate J superpathways
     IDs <- simuPathway(J)
@@ -27,9 +27,21 @@ simuFactorModel <- function(IDs=NULL,J=5,K=10,N=1000,S=1e4,G.model=c("gaussian",
   if(regenerate.L==TRUE){
     L <- matrix(data = NA,nrow = m,ncol = K)
     for (k in 1:K) {
-      L[,k] <- rnorm(n = m,mean = regenerate.paras$L.parameters[[k]]$mu,regenerate.paras$L.parameters[[k]]$sd)
+      L[,k] <- rnorm(n = m,mean = L.parameters[[k]]$mu,L.parameters[[k]]$sd)
     }
-    L <- L[,regenerate.paras$column.orders]
+    if(!is.null(common.spikes)){
+      L[which(IDs$SUB_PATHWAY%in%common.spikes),] <- 0
+      for (k in 1:K) {
+        L.parameters[[k]]$spikes[unique(IDs$SUB_PATHWAY)%in%common.spikes] <- 1
+      }
+    }
+    #add outliers
+    for (k in 1:K) {
+      outliers <- LaplacesDemon::rbern(n = nrow(IDs),prob = p.out)
+      L.out <- runif(n = sum(outliers==1),min = -6,max = 6)
+      L.parameters[[k]]$outliers <- rep(0,nrow(IDs));L.parameters[[k]]$outliers[which(outliers==1)[(L.out-L.parameters[[k]]$mu[outliers==1]-3*L.parameters[[k]]$sd[outliers==1])*(L.out-L.parameters[[k]]$mu[outliers==1]+3*L.parameters[[k]]$sd[outliers==1])>0]] <- 1
+      L[which(outliers==1)[(L.out-L.parameters[[k]]$mu[outliers==1]-3*L.parameters[[k]]$sd[outliers==1])*(L.out-L.parameters[[k]]$mu[outliers==1]+3*L.parameters[[k]]$sd[outliers==1])>0],k] <- L.out[(L.out-L.parameters[[k]]$mu[outliers==1]-3*L.parameters[[k]]$sd[outliers==1])*(L.out-L.parameters[[k]]$mu[outliers==1]+3*L.parameters[[k]]$sd[outliers==1])>0]
+    }
   }else{
     p.0 <- rbeta(n = K,shape1 = 2,shape2 = 1)
     L <- matrix(data = NA,nrow = m,ncol = K)
@@ -40,8 +52,7 @@ simuFactorModel <- function(IDs=NULL,J=5,K=10,N=1000,S=1e4,G.model=c("gaussian",
       L[,k] <- simu.L$L
     }
     column.orders <- order(colSums(L^2),decreasing = T)
-    L <- L[,column.orders]
-    regenerate.paras <- list(L.parameters,column.orders);names(regenerate.paras) <- c("L.parameters","column.orders")
+    L <- L[,column.orders];L.parameters <- L.parameters[column.orders]
   }
   #simulate G
   sigSNPs <- LaplacesDemon::rbern(n = S*K,prob = p.G.nonzero)
@@ -56,14 +67,16 @@ simuFactorModel <- function(IDs=NULL,J=5,K=10,N=1000,S=1e4,G.model=c("gaussian",
   Dss = rowSums(X^2)
   Xi <- matrix(data = rnorm(n = N*K,mean = 0,sd = 1),nrow = N,ncol = K)
   C <- t(X)%*%G+Xi
-
+  G.tilde <- X%*%C;G.tilde <- sapply(1:S, function(s){  G.tilde[s,]/sqrt(Dss[s]) });G.tilde <- t(G.tilde)
   #scale L
   SigmaSquare <- rgamma(n = m,shape = 1,rate = 1)# mean = 1
   E <- matrix(data = rnorm(n = N*m,mean = 0,sd = rep(sqrt(SigmaSquare),N)),nrow = m,ncol = N)
   if(fix.L.scaling==FALSE){
-    L <- L/sqrt(eigen(L%*%t(L))[[1]][K]*N/eigen(E%*%t(E))[[1]][1]/1.1)
+    scaling.para <- 1/sqrt(eigen(L%*%t(L))[[1]][K]*N/eigen(E%*%t(E))[[1]][1]/1.1)
+    L <- L*scaling.para
   }else{
-    L <- L*L.scaling
+    scaling.para <- L.scaling
+    L <- L*scaling.para
   }
 
 
@@ -77,7 +90,7 @@ simuFactorModel <- function(IDs=NULL,J=5,K=10,N=1000,S=1e4,G.model=c("gaussian",
   Y <- Y-rowMeans(Y)%*%t(rep(1,N))
   B.hat <- Y%*%t(X);B.hat <- sapply(1:S, function(s) B.hat[,s]/sqrt(Dss[s]))
 
-  result <- list(IDs,L,G,X,Xi,C,Delta,E,Y,B.hat,regenerate.paras);names(result) <- c("metabolites","L","G","X","Xi","C","Delta","E","Y","B.hat","regenerate.paras")
+  result <- list(IDs,L,G,X,Xi,C,Delta,E,Y,B.hat,G.tilde,L.parameters,scaling.para);names(result) <- c("metabolites","L","G","X","Xi","C","Delta","E","Y","B.hat","G.tilde","L.parameters","scaling.para")
   return(result)
 }
 

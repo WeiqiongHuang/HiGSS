@@ -4,7 +4,7 @@
 \alias{prepareData}
 \title{Generate the data format used by HDP_Gibbs.}
 \usage{
-prepareData(B.hat, N, K, IDs)
+prepareData(B.hat, N, K, IDs, L = NULL, G.tilde = NULL, naive.variance = FALSE)
 }
 \arguments{
 \item{B.hat}{The standardized coefficient matrix.}
@@ -14,6 +14,12 @@ prepareData(B.hat, N, K, IDs)
 \item{K}{Number of latent factors to estimate.}
 
 \item{IDs}{Metabolite pathway information.}
+
+\item{L}{The true metabolite effect matrix. If it is provided, the estimated L.hat and G.hat will be rotated to match L. This function is only used in simulations.}
+
+\item{naive.variance}{Logical. If it is true, the variance of metabolite effects will be set to the naive variance. This function is only used in simulations. It should not be set as TRUE in read data analysis.}
+
+\item{G}{The true genetic effect matrix. If it is provided, the estimated L.hat and G.hat will be rotated to match G. This function is only used in simulations.}
 }
 \value{
 A list containing estimated L and variances of estimates.

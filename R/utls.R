@@ -123,10 +123,10 @@ graphicalCluster <- function(w,method="max",threshold,include.singleton=F,p.sing
       }
     }else{
       if(length(clusters)==0){
-        singletons <- rownames(w)[1-p.singleton <= threshold]
+        singletons <- rownames(w)[p.singleton >= threshold]
       }else{
         singletons <- rownames(w)[rowSums(sapply(clusters, function(cluster){rownames(w)%in%cluster}))==0]
-        singletons <- singletons[singletons%in% rownames(w)[1-p.singleton <= threshold]]
+        singletons <- singletons[singletons%in% rownames(w)[p.singleton >= threshold]]
       }
     }
     if(length(singletons)>0){

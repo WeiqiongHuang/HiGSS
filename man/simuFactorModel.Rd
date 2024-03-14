@@ -17,7 +17,7 @@ simuFactorModel(
   p.Delta.0 = 0.2,
   common.spikes = NULL,
   regenerate.L = FALSE,
-  regenerate.paras = NULL,
+  L.parameters = NULL,
   fix.L.scaling = FALSE,
   L.scaling = NULL
 )
@@ -33,7 +33,7 @@ simuFactorModel(
 
 \item{S}{Number of genetic variants. Default is 1e4.}
 
-\item{G.model}{Distribution of non-zero genetic effects. Can take values of either 'gaussian' or 'laplace'.}
+\item{G.model}{Distribution of non-zero genetic effects. Can take values of either 'Gaussian' or 'Laplace'.}
 
 \item{p.l.spike}{Probability of generating spike pathways.}
 
@@ -45,14 +45,14 @@ simuFactorModel(
 
 \item{common.spikes}{A vector of subpathway names. All entries of L belonging to those subpathway are set as 0. Default is NULL.}
 
+\item{fix.L.scaling}{Default is FALSE. The function will automatically scale L to make the signal strength comparable to noise level. If it's set as TRUE, 'L.scaling' must also be specified.}
+
+\item{L.scaling}{User specified scalar to scale L.}
+
 \item{regenerate.paras}{A list containing parameters to regenerate L. Default is NULL.}
-
-\item{fix.L.scaling}{Default is FALSE. The function will automatically scale L to make the signal strength compariable to noise level. If it's set as TRUE, 'L.scaling' must also be specified.}
-
-\item{L.scaling}{User specificed scalar to scale L.}
 }
 \value{
-A list containg matrices in mtGWAS factor analysis model.
+A list containing matrices in mtGWAS factor analysis model.
 }
 \description{
 Simulate metabolite GWAS data from the factor model

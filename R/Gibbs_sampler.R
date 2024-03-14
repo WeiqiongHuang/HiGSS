@@ -59,7 +59,7 @@ HDP_Gibbs <- function(data,Iter=1500,record=501){
     M_k <- matrix(data = 0,nrow = J);M_k <- M_k[,-1]#number of tables serving dish k
     num.sub <- length(unique(IDs$SUB_PATHWAY))
     Community <- matrix(data = 0,nrow = num.sub,ncol = num.sub)
-    Is.singleton <- rep(0,length(unique(data$metabolites$SUB_PATHWAY)))
+    Is.singleton <- rep(0,length(unique(data$IDs$SUB_PATHWAY)))
     #clusterAssignments <- array(data = NA,dim = c(num.sub,num.sub,Iter-record+1))
     Mu.g <- matrix(nrow = Iter-record+1,ncol = num.sub)
     Sigma.g <- matrix(nrow = Iter-record+1,ncol =num.sub)
@@ -397,9 +397,9 @@ HDP_Gibbs <- function(data,Iter=1500,record=501){
     p.is.singleton <- Is.singleton/(Iter-record+1)
 
     colnames(Mu.g) <- subpathways;colnames(Sigma.g) <- subpathways
-    colnames(Is.outlier) <- metabolites;colnames(Post.L.mean) <- metabolites;colnames(Post.L.sd) <- metabolites;colnames(LFSR) <- metabolites
+    colnames(Post.L.mean) <- metabolites;colnames(Post.L.sd) <- metabolites;colnames(LFSR) <- metabolites
 
-    result <- list(Mu.g,Sigma.g,Is.outlier,Post.L.mean,Post.L.sd,LFSR,w,p.is.singleton,P.post.theta)
+    result <- list(Mu.g,Sigma.g,Is.outlier[record:Iter,],Post.L.mean,Post.L.sd,LFSR,w,p.is.singleton,P.post.theta)
     names(result) <- c("Mean","SD","Outlier","L.post.mean","L.post.sd","lfsr","W","p.singleton","P.post.theta")
     Results[[k.latent]] <- result
   }

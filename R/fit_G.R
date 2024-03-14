@@ -8,7 +8,7 @@
 #' @examples
 #' fit <- fitMixGaussian(G=rnorm(1000),init_sigma=c(1,1.5),init_pi=c(0.9,0.1))
 #' @export
-fitMixGaussian <- function(G,init_sigma,init_pi,fix.sigma1=TRUE,threshold.fsr=0.05){
+fitMixGaussian <- function(G,init_sigma,init_pi,fix.sigma1=TRUE,threshold.converage=1e-5,threshold.fsr=0.05){
   pi.old <- init_pi;sigma.old <- init_sigma;pi.new <- pi.old;sigma.new <- sigma.old
   con <- 0
   while (!con) {
@@ -23,7 +23,7 @@ fitMixGaussian <- function(G,init_sigma,init_pi,fix.sigma1=TRUE,threshold.fsr=0.
     if(any(sigma.new<1e-04)){
       sigma.new <- c(sigma0,init_sigma)
     }
-    con <- converged2(pi.old,sigma.old,pi.new,sigma.new,G)
+    con <- converged2(pi.old,sigma.old,pi.new,sigma.new,G,threshold.converage)
   }
   post <- list(pi.old,sigma.new);names(post) <- c("pi","sigma")
 
@@ -41,8 +41,8 @@ fitMixGaussian <- function(G,init_sigma,init_pi,fix.sigma1=TRUE,threshold.fsr=0.
   return(result)
 }
 
-converged2 <- function(pi.old,sigma.old,pi.new,sigma.new,G){
+converged2 <- function(pi.old,sigma.old,pi.new,sigma.new,G,threshold.converage){
   l.old <- pi.old[1]*dnorm(x = G,mean = 0,sd = sigma.old[1])+pi.old[2]*dnorm(x = G,mean = 0,sd = sigma.old[2])
   l.new <- pi.new[1]*dnorm(x = G,mean = 0,sd = sigma.new[1])+pi.new[2]*dnorm(x = G,mean = 0,sd = sigma.new[2])
-  return(ifelse( abs(sum(log(l.old))-sum(log(l.new)))<1e-4,1,0 ))
+  return(ifelse( abs(sum(log(l.old))-sum(log(l.new)))<threshold.converage,1,0 ))
 }

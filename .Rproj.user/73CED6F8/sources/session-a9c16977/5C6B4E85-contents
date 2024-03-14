@@ -1,0 +1,215 @@
+---
+title: "Simulations such that ED fails"
+author: "Weiqiong Huang"
+date: "2022-11-29"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r}
+library(LaplacesDemon)
+library(invgamma)
+library(aricode)
+source("funcs/simulations.R")
+library(e1071)  
+library(rospca)
+library(pracma)
+library(sva)
+library(PANICr)
+library(xts)
+library(cate)
+J <- 5; 
+set.seed(3)
+SUPER_PATHWAY <- vector()
+SUB_PATHWAY <- vector()
+for (j in 1:J) {
+  G <- rpois(n = 1,lambda = 8)
+  for (g in 1:G) {
+    mg <- ifelse(rpois(n = 1,lambda = 10)>13,rpois(n = 10,lambda = 30),rpois(n = 5,lambda = 10))
+    SUB_PATHWAY <- c(SUB_PATHWAY, rep(paste0(j,":",g),mg))
+    SUPER_PATHWAY <- c(SUPER_PATHWAY, rep(j,mg))
+  }
+}
+metabolites <- (cbind(SUPER_PATHWAY,SUB_PATHWAY,c(1:length(SUPER_PATHWAY))))
+colnames(metabolites) <- c("SUPER_PATHWAY","SUB_PATHWAY","metabolite")
+metabolites <- as.data.frame(metabolites)
+
+seeds <- c(1,2,3,5,7,9,11,12,20,22)
+K <- 10;K.hat <- K
+N <- 1000;S <- 10000
+num.metabolites <- nrow(metabolites)
+p.0 <- rbeta(n = K,shape1 = 2,shape2 = 1)
+sigma.alt <- runif(n = K,min = 6,max = 9)
+L.true <- matrix(data = NA,nrow = num.metabolites,ncol = K)
+L.parameters <- list();clusters.true <- list()
+for (k in 1:K) {
+  set.seed(seeds[k])
+  simu.L <- rHDP(metabolites = metabolites,gamma = 4,alpha0 = 2,p.00 = 0.05,b.l = -6,b.u = 6,p.0 = p.0[k],p.out = 0,tau = 10,sigma.alpha = 3,sigma.beta = 2)
+  L.parameters[[k]] <- simu.L
+  L.true[,k] <- simu.L$L
+  clusters.true[[k]] <- simu.L$K.sub
+}
+# regenerate.parameters <- list(L.parameters,column.orders)
+# names(regenerate.parameters) <- c("L.parameters","column.orders")
+column.orders <- order(colSums(L.true^2),decreasing = T)
+L.true <- L.true[,column.orders]
+
+sigSNPs <- rbern(n = S*K,prob = 0.005)
+#gaussian entries
+G <- matrix(data=ifelse(sigSNPs==1,rnorm(n = S*K,mean = 0,sd = sigma.alt/sqrt(N)),0), nrow = S, ncol = K,byrow = T)
+#laplace entries
+#G <- matrix(data=ifelse(sigSNPs==1,rlaplace(n = S*K,mu = 0,sigma = sigma.alt[k]/sqrt(2*N)),0), nrow = S, ncol = K,byrow = T)
+
+
+sigSNPs <- matrix(data=sigSNPs, nrow = S, ncol = K,byrow = T)
+sigSNPs <- rowSums(sigSNPs)>0
+X <- simuGenotype(N = N,S = S)$X
+X <- X-rowMeans(X)%*%t(rep(1,N))
+Dss = rowSums(X^2)
+Theta <- matrix(data = rnorm(n = N*K,mean = 0,sd = 1),nrow = N,ncol = K)
+C <- t(X)%*%G+Theta
+#C <- Theta
+
+SigmaSquare <- rgamma(n = num.metabolites,shape = 1,rate = 1)# mean = 1
+E <- matrix(data = rnorm(n = N*num.metabolites,mean = 0,sd = rep(sqrt(SigmaSquare),N)),nrow = num.metabolites,ncol = N)
+L.true <- L.true/sqrt(eigen(L.true%*%t(L.true))[[1]][K]*N/eigen(E%*%t(E))[[1]][1]/1.2)
+#eigen(L%*%t(L))[[1]][K]*N/eigen(E%*%t(E))[[1]][1]
+
+Delta <- simuDelta(S = S,metabolites = metabolites,Dss = Dss,p0 =0.3,SigmaSquare = SigmaSquare)
+
+M <- as.matrix(L.true%*%t(C))+Delta%*%X+E
+M <- M-rowMeans(M)%*%t(rep(1,N))
+B.hat <- M%*%t(X);B.hat <- sapply(1:S, function(s) B.hat[,s]/sqrt(Dss[s]))
+Sigma2.hat <- rowMeans(B.hat^2)
+B.hat <- diag(1/sqrt(Sigma2.hat))%*%B.hat
+B.svd <- svd(B.hat)
+#plot(B.svd$d)
+L.hat <- B.svd$u[,1:K]*sqrt(num.metabolites)
+G.bar <- B.svd$v[,1:K]*sqrt(S)
+G.hat <- X%*%C;G.hat <- sapply(1:S, function(s){  G.hat[s,]/sqrt(Dss[s]) });G.hat <- t(G.hat)
+U <- svd(t(G.bar)%*%G.hat)$u;V <- svd(t(G.bar)%*%G.hat)$v
+A <- U%*%t(V)
+L.hat <- L.hat%*%A
+
+Sigma <- vector()
+for (m in 1:num.metabolites) {
+  Sigma[m] <- (sum(B.hat[m,]^2)-sum( (t(B.hat[m,])%*%B.svd$v[,1:K])%*%t((t(B.hat[m,])%*%B.svd$v[,1:K]))  ) )/(S-1)
+}
+
+IDs <- metabolites
+
+for (k in 1:K) {
+  par(mfrow=c(1,2))
+  plot(L.true[,k],pch=ifelse(L.true[,k]==0,17,19),col= match(IDs$SUB_PATHWAY,cbind(unique(IDs$SUB_PATHWAY), c(1:length(unique(IDs$SUB_PATHWAY))) )));abline(h=0)
+  plot(sign(skewness(L.true[,k])*skewness(L.hat[,k]))*L.hat[,k],pch=19,col= match(IDs$SUB_PATHWAY,cbind(unique(IDs$SUB_PATHWAY), c(1:length(unique(IDs$SUB_PATHWAY))) )));abline(h=0)
+}
+```
+
+```{r}
+set.seed(1)
+K <- 10
+m <- nrow(metabolites)
+N <- 1000;S <- 10000
+dBEMAestimates <- vector();EDestimates <- vector();PAestimates <- vector();PANICrestimates <- vector();BEMAestimates <- vector();BCVestimates <- vector()
+for (i in 28:50) {
+  L.true <- matrix(data = NA,nrow = num.metabolites,ncol = K)
+  for (k in 1:K) {
+    L.true[,k] <- rnorm(n = num.metabolites,mean = L.parameters[[k]]$mu,L.parameters[[k]]$sd)
+  }
+  L.true <- L.true[,column.orders]
+  sigSNPs <- rbern(n = S*K,prob = 0.005)
+  #gaussian entries
+  G <- matrix(data=ifelse(sigSNPs==1,rnorm(n = S*K,mean = 0,sd = sigma.alt/sqrt(N)),0), nrow = S, ncol = K,byrow = T)
+  sigSNPs <- matrix(data=sigSNPs, nrow = S, ncol = K,byrow = T)
+  sigSNPs <- rowSums(sigSNPs)>0
+  X <- simuGenotype(N = N,S = S)$X
+  X <- X-rowMeans(X)%*%t(rep(1,N))
+  Dss = rowSums(X^2)
+  Theta <- matrix(data = rnorm(n = N*K,mean = 0,sd = 1),nrow = N,ncol = K)
+  C <- t(X)%*%G+Theta
+  SigmaSquare <- rgamma(n = num.metabolites,shape = 1,rate = 1)# mean = 1
+  E <- matrix(data = rnorm(n = N*num.metabolites,mean = 0,sd = rep(sqrt(SigmaSquare),N)),nrow = num.metabolites,ncol = N)
+  #L.true <- L.true/sqrt(eigen(L.true%*%t(L.true))[[1]][K]*N/eigen(E%*%t(E))[[1]][1]/1)
+  L.true <- L.true*0.09
+  Delta <- simuDelta(S = S,metabolites = metabolites,Dss = Dss,p0 =0.3,SigmaSquare = SigmaSquare)
+  M <- as.matrix(L.true%*%t(C))+Delta%*%X+E
+  M <- M-rowMeans(M)%*%t(rep(1,N))
+  B.hat <- M%*%t(X);B.hat <- sapply(1:S, function(s) B.hat[,s]/sqrt(Dss[s]))
+  # B.svd <- svd(B.hat)
+  # plot(B.svd$d)
+  #ED
+  findF <- cate::est.factor.num(Y = t(B.hat),method = "ed",rmax = 20);EDestimates[i] <- findF
+  #BCV
+  findF <- cate::est.factor.num(Y = t(B.hat),method = "bcv",rmax = 20);BCVestimates[i] <- findF$r
+  #PANICr
+  B.hat.xts <- xts(x = B.hat,order.by = as.Date(c(1:nrow(B.hat))))
+  test <- getnfac(x = B.hat.xts,kmax = 20,criteria = "IC1");PANICrestimates[i] <- as.numeric(test$ic)
+  #PA
+  PAestimates[i] <- num.sv(dat = B.hat,mod = rep(1,S),method = "be")
+  #dEBMA
+  source("funcs/EstimateK_Gamma.R")
+  test <- dBEMA(Stand.B = B.hat,N = N);dBEMAestimates[i] <- test$nFactors
+  #BEMA
+  source("funcs/BEMA.R")
+  test <- BEMA(data = t(B.hat),n = S,p = m,alpha = 0.1);BEMAestimates[i] <- test
+}
+```
+
+```{r}
+save(list = c("dBEMAestimates","BEMAestimates","EDestimates","PANICrestimates","PAestimates","BCVestimates"),file = "results/simulationF19.RData")
+table(dBEMAestimates)
+table(BEMAestimates)
+table(EDestimates)
+table(PAestimates)
+table(PANICrestimates)
+table(BCVestimates)
+```
+
+```{r}
+library(ggplot2)
+library(ggbreak) 
+library(scales)
+
+
+load("~/R/mtGWAS_N5000/results/simulationF19.RData")
+Size <- length(dBEMAestimates)
+df <- rbind(cbind(dBEMAestimates,rep("dBEMA",Size)),cbind(BEMAestimates,rep("BEMA",Size)),cbind(EDestimates,rep("ED",Size)),cbind(PANICrestimates,rep("PANICr",Size)),cbind(PAestimates,rep("PA",Size)),cbind(BCVestimates,rep("BCV",Size)))
+accuracy <- c(round(sum(dBEMAestimates==10)/length(dBEMAestimates),3),
+round(sum(BEMAestimates==10)/length(BEMAestimates),3),
+round(sum(EDestimates==10)/length(EDestimates),3),
+round(sum(PANICrestimates==10)/length(PANICrestimates),3),
+round(sum(PAestimates==10)/length(PAestimates),3),
+round(sum(BCVestimates==10)/length(BCVestimates),3))
+
+x <- cbind(c("dBEMA","BEMA","ED","PANICr","PA","BCV"),accuracy);colnames(x) <- c("method","accuracy")
+x <- data.frame(x)
+
+df <- cbind(df,rep(c(1,2,3,4,5,6),each=Size))
+colnames(df) <- c("est","method","order")
+df <- as.data.frame(df)
+df$est <- as.numeric(df$est);df$order <- as.numeric(df$order)
+
+
+pdf(file = "F10violin_normal_updated.pdf",width = 6,height = 5)
+ggplot(df, aes(x=reorder(method, order), y=est, fill=method)) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"))+ 
+  geom_hline(yintercept = 10, linetype="dashed", color = "red",size=1)+
+  geom_hline(yintercept = setdiff(c(0:20),10), linetype="dashed", color = "grey",size=0.5)+
+  geom_violin(width=1.5, alpha=0.3)+
+  #geom_boxplot(width=0.5, color="black", alpha=0.1) +
+  #geom_jitter(width=0.1,height = 0,size=1.5,shape=1,color=rep(c("palegreen3","khaki3","paleturquoise3","hotpink1","skyblue3","salmon1"),each=50))+
+  geom_jitter(width=0.1,height = 0,size=1.5,shape=1)+
+  # scale_y_break(c(10, 25))+
+  # scale_y_break(c(35, 160))+
+  # scale_y_continuous(breaks= pretty_breaks())+
+  xlab(NULL) + ylab(NULL)+
+  theme(legend.position = "none")+
+  ylim(0, 20)+
+  geom_text(
+    aes(x = df$method, y = rep(c(12,11,15,9,9,8),each=Size), label = paste0(100*rep(accuracy,each=Size),"%"),cex=1.3),
+  ) 
+dev.off()
+```
+

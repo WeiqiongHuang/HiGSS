@@ -1,0 +1,208 @@
+---
+title: "regenerate the figures in simulations"
+output: html_document
+date: "2024-03-10"
+---
+
+```{r}
+library(devtools)
+install_github("WeiqiongHuang/HiGSS")
+library(HiGSS)
+```
+
+Simulate B.hat to test the performance of different methods estimating number of latent factors.
+```{r}
+library(xts)
+library(PANICr)
+library(sva)
+N <- 1000;K <- 10;Num.simulation <- 10
+set.seed(3)
+IDs <- simuPathway(J = 5)
+
+simu.1st <- simuFactorModel(IDs = IDs,G.model="gaussian",fix.L.scal)
+
+dBEMAestimates <- vector();EDestimates <- vector();PAestimates <- vector();PANICrestimates <- vector();BEMAestimates <- vector();BCVestimates <- vector()
+
+#regenerate data with the same subpathway parameters to test different methods
+for (i in 1:Num.simulation) {
+  simu.2rd <- simuFactorModel(IDs = IDs,G.model="gaussian",regenerate.L = TRUE,L.parameters = simu.1st$L.parameters,fix.L.scaling = T,L.scaling = simu.1st$scaling.para)
+  B.hat <- simu.2rd$B.hat
+  #ED
+  ED.est <- cate::est.factor.num(Y = t(B.hat),method = "ed",rmax = 20);EDestimates[i] <- ED.est
+  #BCV
+  BCV.est <- cate::est.factor.num(Y = t(B.hat),method = "bcv",rmax = 20);BCVestimates[i] <- BCV.est$r
+  #PANICr
+  B.hat.xts <- xts(x = B.hat,order.by = as.Date(c(1:nrow(B.hat))))
+  PANICr.est <- getnfac(x = B.hat.xts,kmax = 20,criteria = "IC1");PANICrestimates[i] <- as.numeric(PANICr.est$ic)
+  #PA
+  PAestimates[i] <- num.sv(dat = B.hat,mod = rep(1,ncol(B.hat)),method = "be")
+  #dEBMA
+  dEBMA.est <- dBEMA(Stand.B = B.hat,N = N);dBEMAestimates[i] <- dEBMA.est$nFactors
+  #BEMA
+  EBMA.est <- BEMA(data = t(B.hat),n = ncol(B.hat),p = nrow(B.hat),alpha = 0.1);BEMAestimates[i] <- EBMA.est
+}
+
+#View the results
+table(dBEMAestimates)
+table(BEMAestimates)
+table(EDestimates)
+table(PAestimates)
+table(PANICrestimates)
+table(BCVestimates)
+```
+
+Simulate data to test the performance of our Gibbs sampler at recovering subpathway clusters
+```{r}
+N <- 1000;K <- 10;Num.simulation <- 10
+set.seed(3)
+IDs <- simuPathway(J = 5)
+
+simu.1st <- simuFactorModel(IDs = IDs,G.model="gaussian")
+
+CoverageRates <- matrix(nrow = Num.simulation,ncol = K);InclusionRates <- matrix(nrow = Num.simulation,ncol = K)
+#regenerate data with the same subpathway parameters
+for (i in 1:Num.simulation) {
+  simu.2rd <- simuFactorModel(IDs = IDs,G.model="gaussian",regenerate.L = TRUE,L.parameters = simu.1st$L.parameters,fix.L.scaling = T,L.scaling = simu.1st$scaling.para)
+  B.hat <- simu.2rd$B.hat
+  #rotate L.hat to match L
+  data <- prepareData(B.hat = B.hat,N = N,K = K,IDs = IDs,L = simu.2rd$L)
+  fit.L <- HDP_Gibbs(data = data,Iter = 200,record = 101)
+  #calculate coverage rates for each factor
+  CoverageRates[i,] <- sapply(1:K, function(k){
+    cluster.true <- simu.2rd$L.parameters[[k]]$clusters
+    cluster.true <- sapply(unique(cluster.true), function(xxx){unique(IDs$SUB_PATHWAY)[cluster.true==xxx]})
+    cluster.est <- graphicalCluster(w = fit.L[[k]]$W,method = "max",threshold = 0.5,include.singleton = T,p.singleton = fit.L[[k]]$p.singleton)
+    coverageRate(clusters.true = cluster.true,clusters.result = cluster.est)
+  })
+  InclusionRates[i,] <- sapply(1:K, function(k){
+    cluster.true <- simu.2rd$L.parameters[[k]]$clusters
+    cluster.true <- sapply(unique(cluster.true), function(xxx){unique(IDs$SUB_PATHWAY)[cluster.true==xxx]})
+    cluster.est <- graphicalCluster(w = fit.L[[k]]$W,method = "max",threshold = 0.5,include.singleton = T,p.singleton = fit.L[[k]]$p.singleton)
+    inclusionRate(clusters.true = cluster.true,clusters.result = cluster.est)
+  })
+  
+}
+
+#Visualize results
+value <- c(as.vector(InclusionRates),as.vector(CoverageRates))
+factor.index <- rep(rep(as.factor(c(1:K)),each=Num.simulation),2)
+Metric <- rep(c("Inclusion rates","Coverage rates"),each=Num.simulation*K)
+
+data <- data.frame(value,factor.index,Metric)
+
+library(ggplot2)
+ggplot(data = data, aes(x=factor.index, y=value)) + geom_boxplot(aes(fill=Metric),width=0.4,position = position_dodge(width=0.5)) + ylim(0.25,1) + xlab("Factor index")+ ylab("Value")
+```
+
+Simulate L with common spikes t the performance of our Gibbs sampler at recovering subpathway clusters and identifying outliers
+```{r}
+N <- 1000;K <- 10;Num.simulation <- 50
+set.seed(3)
+IDs <- simuPathway(J = 5)
+
+simu.1st <- simuFactorModel(IDs = IDs,G.model="gaussian")
+
+p.spike.correct <- matrix(nrow = length(unique(IDs$SUB_PATHWAY)),ncol = K)
+p.spike.naive <- matrix(nrow = length(unique(IDs$SUB_PATHWAY)),ncol = K)
+outlier.power.correct <- vector();outlier.power.naive <- vector()
+outlier.FDR.correct <- vector();outlier.FDR.naive <- vector()
+set.seed(1)
+for (i in 1:length(unique(IDs$SUB_PATHWAY))) {
+  simu.2rd <- simuFactorModel(IDs = IDs,G.model="gaussian",regenerate.L = TRUE,L.parameters = simu.1st$L.parameters,fix.L.scaling = T,L.scaling = simu.1st$scaling.para,common.spikes = unique(IDs$SUB_PATHWAY)[i])
+  B.hat <- simu.2rd$B.hat
+  #correct variance
+  data.correct <- prepareData(B.hat = B.hat,N = N,K = K,IDs = IDs,L = simu.2rd$L)
+  fit.L.correct <- HDP_Gibbs(data = data.correct,Iter = 200,record = 101)
+  #spikes
+  p.spike.correct[i,] <- sapply(fit.L.correct, function(xxx){ colMeans(xxx$SD==0)[i] })
+  #outliers
+  a <- sapply(1:K, function(k){ simu.2rd$L.parameters[[k]]$outliers })
+  b <- sapply(fit.L.correct, function(xxx){ colMeans(xxx$Outlier==1) })>0.95
+  outlier.power.correct[i] <- sum(a*b)/sum(a)#power
+  outlier.FDR.correct[i] <- (sum(b)-sum(a*b))/sum(b)#False discovery proportion
+  
+  #naive variance
+  data.naive <- prepareData(B.hat = B.hat,N = N,K = K,IDs = IDs,L = simu.2rd$L,naive.variance = TRUE)
+  fit.L.naive <- HDP_Gibbs(data = data.naive,Iter = 200,record = 101)
+  
+  b <- sapply(fit.L.naive, function(xxx){ colMeans(xxx$Outlier==1) })>0.95
+  
+  p.spike.naive[i,] <- sapply(fit.L.naive, function(xxx){ colMeans(xxx$SD==0)[i] })
+  outlier.power.naive[i] <- sum(a*b)/sum(a)#power
+  outlier.FDR.naive[i] <- (sum(b)-sum(a*b))/sum(b)#False discovery proportion
+}
+
+#Visualize results
+library(ggplot2)
+
+Power <- c(outlier.power.correct,outlier.power.naive)
+Variances <- rep(c("1/N+1/S","1/S"),each=Num.simulation)
+data <- data.frame(Power,Variances)
+ggplot(data = data, aes(x=Variances, y=Power)) + geom_boxplot(aes(fill=Variances),width=0.4,position = position_dodge(width=0.5)) + xlab("Variances")+ ylab("Power")
+
+FDP <- c(outlier.FDR.correct,outlier.FDR.naive)
+Variances <- rep(c("1/N+1/S","1/S"),each=Num.simulation)
+data <- data.frame(FDP,Variances)
+ggplot(data = data, aes(x=Variances, y=FDP)) + geom_boxplot(aes(fill=Variances),width=0.4,position = position_dodge(width=0.5)) +xlab("Variances")+ ylab("FDP")
+
+plot(sapply(1:K, function(k){mean(p.spike.correct[,k]>0.95)  }),ylim=c(0,1),ylab="Frequency",xlab="Factor index",lwd=2,pch=19,type="o",col="blue");lines(sapply(1:K, function(k){mean(p.spike.naive[,k]>0.95)  }),lwd=2,pch=19,type="o",col="black");legend(1,1,legend=c(expression(1/N+1/S), expression(1/S)),
+       col=c("blue","black"), lty=1:1,lwd=2)
+```
+
+Simulate G to test our algorithm's abality at identifying associated SNPs
+```{r}
+N <- 1000;K <- 10;S <- 10000;Num.simulation <- 50
+set.seed(3)
+IDs <- simuPathway(J = 5)
+
+simu.1st <- simuFactorModel(IDs = IDs,G.model="gaussian")
+
+LFSR <- list();SIGSNP <- list()
+for (i in 1:500) {
+  simu.2rd <- simuFactorModel(IDs = IDs,G.model="gaussian",regenerate.L = TRUE,L.parameters = simu.1st$L.parameters,fix.L.scaling = T,L.scaling = simu.1st$scaling.para)
+  
+  B.hat <- simu.2rd$B.hat
+  #rotate G.hat to match L=G.tilde
+  data <- prepareData(B.hat = B.hat,N = N,K = K,IDs = IDs,G.tilde = simu.2rd$G.tilde)
+  lfsr <- matrix(nrow = S,ncol = K)
+  for (k in 1:K) {
+    test <- fitMixGaussian(G = data$G.hat[,k],init_sigma = c(1,1.3),init_pi = c(0.99,0.01),fix.sigma1 = TRUE,threshold.fsr = 0.05)
+    lfsr[,k] <- test$lfsr
+  }
+  LFSR[[i]] <- lfsr;SIGSNP[[i]] <- (simu.2rd$G!=0)
+}
+
+#Visualize results
+bins <- list(c(0,0.01),c(0.01,0.05),c(0.05,0.1),c(0.1,0.15),c(0.15,0.2),c(0.2,0.25),c(0.25,0.3))
+x <- list();y <- list()
+for (k in 1:K) {
+  x[[k]] <- list();y[[k]] <- list()
+}
+for (i in 1:length(LFSR)) {
+  #i <- 1
+  lfsr <- LFSR[[i]];sigSNPs <- SIGSNP[[i]]
+  for (j in 1:length(bins)) {
+    b <- bins[[j]]
+    for (k in 1:K) {
+      if(length(x[[k]])<j){
+        x[[k]][[j]] <- lfsr[,k][lfsr[,k]<b[2] & lfsr[,k]>b[1]]
+        y[[k]][[j]] <- sum(sigSNPs[,k][lfsr[,k]<b[2] & lfsr[,k]>b[1]]==0)
+      }else{
+        x[[k]][[j]] <- c(x[[k]][[j]],lfsr[,k][lfsr[,k]<b[2] & lfsr[,k]>b[1]])
+        y[[k]][[j]] <- y[[k]][[j]]+sum(sigSNPs[,k][lfsr[,k]<b[2] & lfsr[,k]>b[1]]==0)
+      }
+    }
+  }
+}
+
+MyOrder = matrix(1:10, nrow=2, ncol=5, byrow=T)
+col.factor <- c("grey1","khaki4","navy","red1","salmon1","yellow3","green1","turquoise1","dodgerblue","darkviolet")
+x.max <- max(sapply(1:K, function(k){sapply(x[[k]], function(i){mean(i)})}))
+#x.max <- 0.5
+plot(x = c(),y=c(),xlim=c(0,x.max),ylim=c(0,x.max),xlab="Nominal local false sign rate bin",ylab="False discovery proportion",type="o")
+abline(a=0,b=1,col="red",lty=2)
+for (k in 1:K) {
+  lines(sapply(x[[k]], function(i){mean(i)}),sapply(y[[k]], function(i){sum(i)})/sapply(x[[k]], function(i){length(i)}),type="o",pch=15,col=col.factor[k])
+}
+legend("topleft",legend = c(1:K)[MyOrder],fill= col.factor[MyOrder],ncol = 5,inset=.05,title="Factor index",cex=0.7,border=NA)
+```

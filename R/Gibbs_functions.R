@@ -4,20 +4,37 @@
 #' @param N Sample size.
 #' @param K Number of latent factors to estimate.
 #' @param IDs Metabolite pathway information.
+#' @param L The true metabolite effect matrix. If it is provided, the estimated L.hat and G.hat will be rotated to match L. This function is only used in simulations.
+#' @param G The true genetic effect matrix. If it is provided, the estimated L.hat and G.hat will be rotated to match G. This function is only used in simulations.
+#' @param naive.variance Logical. If it is true, the variance of metabolite effects will be set to the naive variance. This function is only used in simulations. It should not be set as TRUE in read data analysis.
 #' @return A list containing estimated L and variances of estimates.
 #' @export
-prepareData <- function(B.hat,N,K,IDs){
+prepareData <- function(B.hat,N,K,IDs,L=NULL,G.tilde=NULL,naive.variance=FALSE){
   #sort pathways and match B
   num.metabolites <- nrow(B.hat);S <- ncol(B.hat)
   B.svd <- svd(B.hat)
   #plot(B.svd$d)
   L.hat <- B.svd$u[,1:K]*sqrt(num.metabolites)
+  G.hat <- B.svd$v[,1:K]*sqrt(S)
+  if(!is.null(L)){
+    U <- svd(t(L.hat)%*%L)$u;V <- svd(t(L.hat)%*%L)$v;A <- U%*%t(V)
+    L.hat <- L.hat%*%A;G.hat <- G.hat%*%A
+  }else if(!is.null(G.tilde)){
+    U <- svd(t(G.hat)%*%G.tilde)$u;V <- svd(t(G.hat)%*%G.tilde)$v;A <- U%*%t(V)
+    L.hat <- L.hat%*%A;G.hat <- G.hat%*%A
+  }else{
+    print("Only one of L and G should be specified")
+  }
   Sigma <- vector()
   for (m in 1:num.metabolites) {
     Sigma[m] <- (sum(B.hat[m,]^2)-sum( (t(B.hat[m,])%*%B.svd$v[,1:K])%*%t((t(B.hat[m,])%*%B.svd$v[,1:K]))  ) )/(S-1)
   }
-  Var <- list(Sigma,num.metabolites*(1+S/N)/B.svd$d[1:K]^2);names(Var) <- c("U","V")#
-  data <- list(L.hat,Var,IDs);names(data) <- c("L","var","IDs")
+  if(naive.variance==TRUE){
+    Var <- list(Sigma,num.metabolites/B.svd$d[1:K]^2);names(Var) <- c("U","V")#
+  }else{
+    Var <- list(Sigma,num.metabolites*(1+S/N)/B.svd$d[1:K]^2);names(Var) <- c("U","V")
+  }
+  data <- list(L.hat,Var,IDs,G.hat);names(data) <- c("L","var","IDs","G.hat")
   return(data)
 }
 

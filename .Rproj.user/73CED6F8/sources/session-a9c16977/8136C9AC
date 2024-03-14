@@ -1,0 +1,27 @@
+{
+    "id": "8136C9AC",
+    "path": "~/R/HiGSS/R/Gibbs_sampler.R",
+    "project_path": "R/Gibbs_sampler.R",
+    "type": "r_source",
+    "hash": "1215858590",
+    "contents": "",
+    "dirty": false,
+    "created": 1710284004778.0,
+    "source_on_save": false,
+    "relative_order": 4,
+    "properties": {
+        "tempName": "Untitled1",
+        "source_window_id": "",
+        "Source": "Source",
+        "cursorPosition": "399,4",
+        "scrollLine": "384"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 1710359139,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1710359139298,
+    "read_only": false,
+    "read_only_alternatives": []
+}
